@@ -3,7 +3,7 @@ name: Windows checks
 on:
   push:
     branches: [custom]
-    tags: ['v*+custom.*']
+    tags: ['v*custom.*']
   pull_request:
     branches: [custom]
   workflow_dispatch:
