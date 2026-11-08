@@ -1,5 +1,13 @@
 # DSZ - DualSense Zen
 
+This fork maintains custom mapping and tray features on the **custom** branch, based on [MaximumFreak/dsz](https://github.com/MaximumFreak/dsz). Download this fork's builds from [Releases](https://github.com/rahul-k-r/dsz/releases). The built-in updater checks this fork, keeping custom features when updating. Versions use `<upstream version>+custom.<revision>` so custom revisions can update independently.
+
+### Maintaining this fork
+
+`origin` is `rahul-k-r/dsz`; `upstream` is `MaximumFreak/dsz`. The custom branch contains the modifications, while main tracks upstream. To integrate upstream changes, fetch upstream, merge `upstream/main` into custom, resolve conflicts, and run `cargo test --workspace --locked` followed by `cargo build --release --locked`. Publish after both pass. Windows CI repeats these checks on pushes and pull requests to custom and uploads the executable as an artifact.
+
+For a custom release, set the workspace and lockfile versions to the upstream base plus the next `+custom.N` revision. Tag the verified commit with `v<version>`, then publish a non-prerelease GitHub release with `dsz.exe` as an asset and mark it latest. The updater uses GitHub's SHA-256 asset digest. Builds downloaded from the original upstream repository use its update channel; install this fork's executable once to switch channels.
+
 **DSZ - DualSense Zen** is a fast, native Windows companion for the PlayStation DualSense, DualSense Edge, and DualShock 4 controllers, written in Rust: lighting, adaptive triggers, Bluetooth haptics and speaker audio, gyro and touchpad mouse, button mapping, virtual Xbox 360 / DualSense / DualShock 4 controllers, and per-game profiles.
 
 ## Why use it

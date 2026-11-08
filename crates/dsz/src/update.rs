@@ -26,8 +26,8 @@ use parking_lot::Mutex;
 
 use crate::engine::Engine;
 
-const LATEST: &str = "https://api.github.com/repos/MaximumFreak/dsz/releases/latest";
-pub const RELEASES: &str = "https://github.com/MaximumFreak/dsz/releases";
+const LATEST: &str = "https://api.github.com/repos/rahul-k-r/dsz/releases/latest";
+pub const RELEASES: &str = "https://github.com/rahul-k-r/dsz/releases";
 /// The release asset that is the app.
 const ASSET: &str = "dsz.exe";
 /// First check a little after startup, out of the way of controllers
@@ -204,11 +204,16 @@ fn hex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-fn parts(v: &str) -> Vec<u32> {
-    v.split(|c: char| !c.is_ascii_digit())
+fn parts(v: &str) -> (Vec<u32>, u32) {
+    let (base, metadata) = v.split_once('+').unwrap_or((v, ""));
+    // Custom builds retain the upstream base version; their release channel
+    // orders the explicit revision even though SemVer ignores build metadata.
+    let revision = metadata.strip_prefix("custom.").and_then(|n| n.parse().ok()).unwrap_or(0);
+    let base = base.split(|c: char| !c.is_ascii_digit())
         .take_while(|p| !p.is_empty())
         .map(|p| p.parse().unwrap_or(0))
-        .collect()
+        .collect();
+    (base, revision)
 }
 
 /// Whether version `a` is newer than `b` ("0.3.10" > "0.3.9").
@@ -414,6 +419,16 @@ mod tests {
         assert!(newer("1.0", "0.9.9"));
         assert!(!newer("0.3.7", "0.3.7"));
         assert!(!newer("0.3.6", "0.3.7"));
+    }
+
+    #[test]
+    fn custom_revisions_update_without_confusing_upstream_versions() {
+        assert!(newer("0.4.7+custom.2", "0.4.7+custom.1"));
+        assert!(newer("0.4.7+custom.10", "0.4.7+custom.9"));
+        assert!(newer("0.4.7+custom.1", "0.4.7"));
+        assert!(newer("0.4.8+custom.1", "0.4.7+custom.99"));
+        assert!(!newer("0.4.7", "0.4.7+custom.1"));
+        assert!(!newer("0.4.7+custom.1", "0.4.7+custom.1"));
     }
 
     #[test]

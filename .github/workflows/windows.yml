@@ -1,0 +1,31 @@
+name: Windows checks
+
+on:
+  push:
+    branches: [custom]
+    tags: ['v*+custom.*']
+  pull_request:
+    branches: [custom]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install 1.94.1 --profile minimal --no-self-update
+      - name: Test
+        run: cargo +1.94.1 test --workspace --locked
+      - name: Build
+        run: cargo +1.94.1 build --release --locked
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: DSZ-custom-windows
+          path: target/release/dsz.exe
+          if-no-files-found: error
