@@ -135,6 +135,37 @@ fn refcount(k: u32, down: bool) -> bool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_keys_do_not_carry_game_keyboard_scan_codes() {
+        for key in crate::profile::MediaKey::ALL {
+            for down in [true, false] {
+                let input = key_input(key.vk(), down);
+                let event = unsafe { input.Anonymous.ki };
+                assert_eq!(event.wVk, key.vk());
+                assert_eq!(event.wScan, 0, "{} down={down}", key.vk());
+                assert_eq!(event.dwFlags & KEYEVENTF_SCANCODE, 0);
+                assert_eq!(event.dwFlags & KEYEVENTF_KEYUP, if down { 0 } else { KEYEVENTF_KEYUP });
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_and_extended_keys_keep_their_scan_codes() {
+        for vk in [0x47, 0x43, 0x42, 0x25] {
+            for down in [true, false] {
+                let event = unsafe { key_input(vk, down).Anonymous.ki };
+                assert_eq!(event.wScan, unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u16);
+                assert_ne!(event.dwFlags & KEYEVENTF_SCANCODE, 0);
+                assert_eq!(event.dwFlags & KEYEVENTF_EXTENDEDKEY, if vk == 0x25 { KEYEVENTF_EXTENDEDKEY } else { 0 });
+            }
+        }
+    }
+}
+
 fn is_extended(vk: u16) -> bool {
     matches!(
         vk,
@@ -150,7 +181,13 @@ fn is_extended(vk: u16) -> bool {
 
 fn key_input(vk: u16, down: bool) -> INPUT {
     let media = (0xA6..=0xB7).contains(&vk);
-    let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u16;
+    // Media scan codes overlap letter keys (Play/Pause is G). Games may
+    // read that field even when the event uses virtual-key mode.
+    let scan = if media {
+        0
+    } else {
+        (unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) }) as u16
+    };
     let mut flags = 0;
     if !down {
         flags |= KEYEVENTF_KEYUP;
