@@ -21,6 +21,17 @@ fn send(inputs: &[INPUT]) {
     if inputs.is_empty() {
         return;
     }
+    #[cfg(test)]
+    if CAPTURE.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some(events) = c.as_mut() {
+            for input in inputs.iter().filter(|i| i.r#type == INPUT_KEYBOARD) {
+                let k = unsafe { input.Anonymous.ki };
+                events.push((k.wVk, k.dwFlags & KEYEVENTF_KEYUP == 0));
+            }
+            true
+        } else { false }
+    }) { return; }
     unsafe {
         SendInput(
             inputs.len() as u32,
@@ -28,6 +39,19 @@ fn send(inputs: &[INPUT]) {
             std::mem::size_of::<INPUT>() as i32,
         );
     }
+}
+
+#[cfg(test)]
+thread_local! { static CAPTURE: std::cell::RefCell<Option<Vec<(u16, bool)>>> = const { std::cell::RefCell::new(None) }; }
+
+#[cfg(test)]
+pub(crate) fn capture_keys(run: impl FnOnce()) -> Vec<(u16, bool)> {
+    struct Reset;
+    impl Drop for Reset { fn drop(&mut self) { CAPTURE.with(|c| *c.borrow_mut() = None); } }
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Vec::new()));
+    let _reset = Reset;
+    run();
+    CAPTURE.with(|c| c.borrow_mut().take().unwrap())
 }
 
 fn mouse_input(dx: i32, dy: i32, data: i32, flags: u32) -> INPUT {

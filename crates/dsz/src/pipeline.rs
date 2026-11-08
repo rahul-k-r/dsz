@@ -747,6 +747,7 @@ impl Stick {
 
 #[derive(Default, Clone)]
 struct MapRt {
+    modifier_down: bool,
     out_down: bool,
     toggled: bool,
     press_at: Option<Instant>,
@@ -773,7 +774,7 @@ fn holdable(a: &Action) -> bool {
 
 fn action_down(engine: &Engine, device: &Device, a: &Action) {
     match a {
-        Action::None => {}
+        Action::None | Action::AppSwitcherHold | Action::AppSwitcherNext | Action::AppSwitcherPrevious => {}
         Action::Key {
             vk,
             ctrl,
@@ -876,6 +877,14 @@ fn action_up(a: &Action) {
     }
 }
 
+fn mapping_down(switcher: &mut crate::mapping::AppSwitcher, engine: &Engine, device: &Device, action: &Action, prefix: u32) {
+    match action {
+        Action::AppSwitcherNext => switcher.step(prefix, false, sim::key),
+        Action::AppSwitcherPrevious => switcher.step(prefix, true, sim::key),
+        _ => action_down(engine, device, action),
+    }
+}
+
 /// Use the mapping's profile while its buttons stay down.
 fn hold_profile(engine: &Engine, device: &Device, m: &Mapping, name: &str, then: &str) {
     let mut buttons = 0u32;
@@ -944,6 +953,8 @@ static TURN_OFFS: parking_lot::Mutex<Vec<String>> = parking_lot::Mutex::new(Vec:
 // ------------------------------------------------------------------ pipeline
 
 pub struct Pipeline {
+    modifiers: crate::mapping::Modifiers,
+    switcher: crate::mapping::AppSwitcher,
     cache: ProfileCache,
     /// The profile the mapping state was built for.
     built_for: Option<Arc<Profile>>,
@@ -975,6 +986,8 @@ pub struct Pipeline {
 impl Pipeline {
     pub fn new() -> Self {
         Pipeline {
+            modifiers: Default::default(),
+            switcher: Default::default(),
             cache: ProfileCache::default(),
             built_for: None,
             gyro: Gyro::new(),
@@ -1022,6 +1035,8 @@ impl Pipeline {
     }
 
     pub fn release_all(&mut self) {
+        self.switcher.arm(0, sim::key);
+        self.modifiers = Default::default();
         self.touch.release();
         for s in self.sticks.iter_mut() {
             s.release();
@@ -1060,7 +1075,7 @@ impl Pipeline {
             // Another profile, or an edit: rebuild only if the mappings
             // differ, so dragging a lightbar slider doesn't let go of a key
             // a mapping is holding or reset a toggle.
-            Some(b) => b.mappings != profile.mappings,
+            Some(b) => b.name != profile.name || b.mappings != profile.mappings || b.modifiers != profile.modifiers,
             None => true,
         };
         self.built_for = Some(profile.clone());
@@ -1279,14 +1294,19 @@ impl Pipeline {
         prev: &InputState,
         now: Instant,
     ) -> (u32, u32, u32) {
-        let mut suppress = 0u32;
+        let modifier = self.modifiers.update(&profile.modifiers, &profile.mappings, s.buttons.0, now);
+        let mut suppress = modifier.suppress;
+        let effective = (s.buttons.0 & !modifier.suppress) | modifier.inject;
+        let armed = profile.mappings.iter().filter(|m| m.enabled && m.action == Action::AppSwitcherHold
+            && m.buttons().all(|b| s.buttons.has(b))).flat_map(|m| m.buttons()).fold(0, |bits, b| bits | b.bit());
+        self.switcher.arm(armed, sim::key);
         // Buttons inside a combo that is held right now: their solo long
         // presses and double taps don't fire.
         let mut in_combo = 0u32;
         for m in profile
             .mappings
             .iter()
-            .filter(|m| m.enabled && m.is_combo())
+            .filter(|m| m.enabled && m.is_combo() && m.action != Action::AppSwitcherHold)
         {
             if m.buttons().all(|b| s.buttons.has(b)) {
                 for b in m.buttons() {
@@ -1306,12 +1326,15 @@ impl Pipeline {
                 continue;
             }
             let combo = m.is_combo();
-            let down = m.buttons().all(|b| s.buttons.has(b));
-            let was = m.buttons().all(|b| prev.buttons.has(b));
+            let delayed_solo = !combo && profile.modifiers.iter().any(|r| r.button == m.button)
+                && m.action != Action::AppSwitcherHold;
+            let down = if delayed_solo { effective & m.button.bit() != 0 } else { m.buttons().all(|b| s.buttons.has(b)) };
+            let was = if delayed_solo { rt.modifier_down } else { m.buttons().all(|b| prev.buttons.has(b)) };
+            rt.modifier_down = down;
             let pressed = down && !was;
             let released = !down && was;
 
-            if m.mute {
+            if m.mute && m.action != Action::AppSwitcherHold {
                 if !combo {
                     if m.button.is_touchpad_zone() {
                         // The game has one touchpad button. Hiding a zone
@@ -1335,9 +1358,12 @@ impl Pipeline {
                 rt.mute_latch &= s.buttons.0;
                 suppress |= rt.mute_latch;
             }
-            if matches!(m.action, Action::None) {
+            if matches!(m.action, Action::None | Action::AppSwitcherHold) {
                 continue;
             }
+            let switch_prefix = crate::mapping::navigation_session(profile, m);
+            if matches!(m.action, Action::AppSwitcherNext | Action::AppSwitcherPrevious)
+                && switch_prefix.is_none() { continue; }
             if !combo && in_combo & m.button.bit() != 0 {
                 // Held as part of a combo: no long press for the solo.
                 rt.long_fired = true;
@@ -1402,11 +1428,11 @@ impl Pipeline {
                 }
                 match m.mode {
                     HoldStyle::Hold => {
-                        action_down(engine, device, &m.action);
+                        mapping_down(&mut self.switcher, engine, device, &m.action, switch_prefix.unwrap_or(0));
                         rt.out_down = holdable(&m.action);
                     }
                     HoldStyle::Tap => {
-                        action_down(engine, device, &m.action);
+                        mapping_down(&mut self.switcher, engine, device, &m.action, switch_prefix.unwrap_or(0));
                         if holdable(&m.action) {
                             rt.out_down = true;
                             rt.tap_up_at = Some(now + Duration::from_millis(30));
@@ -1422,7 +1448,7 @@ impl Pipeline {
                             rt.out_down = false;
                             rt.toggled = false;
                         } else {
-                            action_down(engine, device, &m.action);
+                            mapping_down(&mut self.switcher, engine, device, &m.action, switch_prefix.unwrap_or(0));
                             rt.out_down = holdable(&m.action);
                             rt.toggled = true;
                         }
@@ -1437,7 +1463,7 @@ impl Pipeline {
                             action_up(&m.action);
                             rt.out_down = false;
                         } else {
-                            action_down(engine, device, &m.action);
+                            mapping_down(&mut self.switcher, engine, device, &m.action, switch_prefix.unwrap_or(0));
                             rt.out_down = holdable(&m.action);
                         }
                         rt.turbo_next = Some(now + half);
@@ -1459,7 +1485,7 @@ impl Pipeline {
                 }
             }
         }
-        let mut inject = 0u32;
+        let mut inject = modifier.inject;
         let mut helper = 0u32;
         // Xbox buttons go to the virtual Xbox pad, else to the parked Xbox
         // pad or the helper pad (see `process`).
@@ -1578,6 +1604,43 @@ fn virtual_pad(
         ry,
         l2,
         r2,
+    }
+}
+
+#[cfg(test)]
+mod mapping_feature_tests {
+    use super::*;
+
+    #[test]
+    fn configured_switcher_routes_both_directions_and_cleanup_releases_alt() {
+        let _guard = super::turn_off_tests::gate();
+        let dir = std::env::temp_dir().join(format!("dsz-switcher-test-{}", std::process::id()));
+        let engine = Engine::new(dir.clone());
+        let device = Device::for_test(ds_proto::Connection::Bluetooth, "00:11:22:33:44:55");
+        let mut p = Profile::default();
+        p.modifiers.push(crate::mapping::Modifier::default());
+        p.mappings = vec![Mapping { button: Button::R3, action: Action::AppSwitcherHold, ..Default::default() },
+            Mapping { button: Button::R3, with: vec![Button::R1], mute: true, mode: HoldStyle::Tap, action: Action::AppSwitcherNext, ..Default::default() },
+            Mapping { button: Button::R3, with: vec![Button::L1], mute: true, mode: HoldStyle::Tap, action: Action::AppSwitcherPrevious, ..Default::default() }];
+        let mut pipe = Pipeline::new();
+        pipe.maps = vec![MapRt::default(); 3];
+        pipe.map_actions = p.mappings.iter().map(|m| m.action.clone()).collect();
+        pipe.map_order = vec![1,2,0];
+        let now = Instant::now(); let mut prev = InputState::default();
+        let keys = sim::capture_keys(|| {
+            for (ms, buttons) in [(0, vec![Button::R3]), (250, vec![Button::R3]),
+                (300, vec![Button::R3, Button::R1]), (350, vec![Button::R3]),
+                (400, vec![Button::R3, Button::L1]), (450, vec![Button::R3])] {
+                let mut s = InputState::default(); for b in buttons { s.buttons.set(b, true); }
+                let (hide, inject, _) = pipe.mappings(&engine, &device, &p, &s, &prev, now + Duration::from_millis(ms));
+                assert_eq!(inject, 0);
+                assert_eq!(hide & Button::R3.bit() != 0, ms != 250);
+                prev = s;
+            }
+            pipe.release_all(); // The disconnect and profile-rebuild cleanup path.
+        });
+        assert_eq!(keys, [(0xA4,true), (9,true), (9,false), (0xA0,true), (9,true), (9,false), (0xA0,false), (0xA4,false)]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

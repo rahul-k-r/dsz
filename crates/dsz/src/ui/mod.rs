@@ -103,6 +103,8 @@ pub struct App {
     hwnd_found: bool,
     // Page state
     capture_key: Option<usize>,
+    mapping_copy: Option<(String, crate::profile::Mapping, Vec<String>, crate::mapping::CopyPolicy)>,
+    mapping_copy_undo: Vec<(String, Vec<crate::profile::Mapping>, Vec<crate::profile::Mapping>)>,
     rename: Option<(String, String)>,
     new_profile: String,
     confirm_delete: Option<String>,
@@ -153,11 +155,17 @@ pub fn run(engine: Arc<Engine>, start_hidden: bool) -> Result<(), String> {
         ..Default::default()
     };
     let e = engine.clone();
+    #[cfg(debug_assertions)]
+    let start_tray = snapshot::path().is_none();
+    #[cfg(not(debug_assertions))]
+    let start_tray = true;
+    if start_tray {
     crate::tray::start(engine.clone(), || {
         if let Some(c) = CTX.get() {
             c.request_repaint();
         }
     });
+    }
     eframe::run_native(
         crate::APP_TITLE,
         opts,
@@ -201,6 +209,8 @@ impl App {
             frames: 0,
             hwnd_found: false,
             capture_key: None,
+            mapping_copy: None,
+            mapping_copy_undo: Vec::new(),
             rename: None,
             new_profile: String::new(),
             confirm_delete: None,
@@ -694,7 +704,7 @@ impl eframe::App for App {
                             Page::Mappings => self.page_mappings(ui, ctx, &mut profile),
                             Page::Virtual => self.page_virtual(ui, &mut profile, dev.as_ref()),
                             Page::Profiles => self.page_profiles(ui, &mut profile, dev.as_ref()),
-                            Page::Settings => self.page_settings(ui),
+                            Page::Settings => self.page_settings(ui, &mut profile),
                         }
                         ui.add_space(24.0);
                         // A row that can't wrap widens the whole page and

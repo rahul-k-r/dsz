@@ -5,6 +5,7 @@ use ds_proto::input::Button;
 use super::button_choices;
 use crate::inputsim::{key_catalog, key_name, vk_from_egui};
 use crate::profile::*;
+use crate::mapping::{self, CopyPolicy, Modifier, ModifierMode, WarningKind};
 use crate::ui::theme::*;
 use crate::ui::widgets::*;
 use crate::ui::App;
@@ -27,11 +28,17 @@ enum AKind {
     Gamepad,
     Xbox,
     TurnOff,
+    SwitchHold,
+    SwitchNext,
+    SwitchPrevious,
 }
 
 fn akind(a: &Action) -> AKind {
     match a {
         Action::None => AKind::None,
+        Action::AppSwitcherHold => AKind::SwitchHold,
+        Action::AppSwitcherNext => AKind::SwitchNext,
+        Action::AppSwitcherPrevious => AKind::SwitchPrevious,
         Action::Key { .. } => AKind::Key,
         Action::Mouse { .. } => AKind::Mouse,
         Action::ScrollUp => AKind::ScrollUp,
@@ -50,7 +57,10 @@ fn akind(a: &Action) -> AKind {
     }
 }
 
-const KINDS: [(AKind, &str); 16] = [
+const KINDS: [(AKind, &str); 19] = [
+    (AKind::SwitchHold, "App switcher: hold"),
+    (AKind::SwitchNext, "App switcher: next"),
+    (AKind::SwitchPrevious, "App switcher: previous"),
     (AKind::None, "Nothing"),
     (AKind::Gamepad, "PlayStation button"),
     (AKind::Xbox, "Xbox button"),
@@ -105,6 +115,35 @@ impl App {
         let xbox_on = p.virtual_out.kind == VirtualKind::Xbox360;
         let can_hide = self.engine.companion.can_hide();
         let profile_names = self.engine.profiles.names();
+        self.mapping_copy_editor(ui, p);
+        card(ui, crate::i18n::tr("Modifier buttons"), "", |ui| {
+            muted(ui, crate::i18n::tr("Timed modifiers wait for a combo, replay unused taps, and pass normal holds through after the delay. A later combo suppresses them until release. Dedicated modifiers never reach the game. Requires a virtual controller."));
+            let chosen: Vec<Button> = p.modifiers.iter().map(|r| r.button).collect();
+            let mut remove_modifier = None;
+            for (i, rule) in p.modifiers.iter_mut().enumerate() {
+                ui.push_id(("modifier", i), |ui| ui.horizontal_wrapped(|ui| {
+                    fit(ui, 110.0);
+                    egui::ComboBox::from_id_salt("button").width(100.0).selected_text(crate::i18n::tr(rule.button.short_name())).show_ui(ui, |ui| {
+                        for b in button_choices(edge).into_iter().filter(|b| !b.is_touchpad_zone()) {
+                            if b == rule.button || !chosen.contains(&b) { ui.selectable_value(&mut rule.button, b, crate::i18n::tr(b.short_name())); }
+                        }
+                    });
+                    fit(ui, 310.0);
+                    segmented(ui, &mut rule.mode, &[(ModifierMode::Timed, crate::i18n::tr("Timed pass-through")), (ModifierMode::Dedicated, crate::i18n::tr("Dedicated modifier"))]);
+                    if rule.mode == ModifierMode::Timed {
+                        fit(ui, 420.0);
+                        ui.add(egui::Slider::new(&mut rule.wait_ms, 50..=1000).suffix(" ms").text(crate::i18n::tr("Wait for combo")));
+                    }
+                    if button(ui, crate::i18n::tr("Remove")).clicked() { remove_modifier = Some(i); }
+                }));
+            }
+            if let Some(i) = remove_modifier { p.modifiers.remove(i); }
+            if let Some(b) = std::iter::once(Button::R3).chain(button_choices(edge)).find(|b| !b.is_touchpad_zone() && !p.modifiers.iter().any(|r| r.button == *b)) {
+                if button(ui, crate::i18n::tr("+ Add modifier")).clicked() { p.modifiers.push(Modifier { button: b, ..Default::default() }); }
+            }
+        });
+        ui.add_space(10.0);
+        let warnings = mapping::warnings(p);
 
         // Key capture.
         if let Some(i) = self.capture_key {
@@ -135,6 +174,7 @@ impl App {
 
         let mut remove: Option<usize> = None;
         let mut capture: Option<Option<usize>> = None;
+        let mut copy_request = None;
         if p.mappings.is_empty() {
             card(ui, "", "", |ui| {
                 ui.vertical_centered(|ui| {
@@ -181,6 +221,7 @@ impl App {
                     ui.scope(|ui| {
                     ui.set_max_width(row_w - 28.0);
                     ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(format!("#{}", i + 1)).color(MUTED));
                         toggle(ui, &mut m.enabled);
                         fit(ui, 130.0);
                         egui::ComboBox::from_id_salt(("map-btn", i))
@@ -219,6 +260,9 @@ impl App {
                         if k != before {
                             m.action = match k {
                                 AKind::None => Action::None,
+                                AKind::SwitchHold => { m.gesture = Gesture::Press; m.mode = HoldStyle::Hold; m.mute = false; Action::AppSwitcherHold },
+                                AKind::SwitchNext => { m.gesture = Gesture::Press; m.mode = HoldStyle::Tap; m.mute = true; Action::AppSwitcherNext },
+                                AKind::SwitchPrevious => { m.gesture = Gesture::Press; m.mode = HoldStyle::Tap; m.mute = true; Action::AppSwitcherPrevious },
                                 AKind::Key => Action::Key { vk: 0x20, ctrl: false, shift: false, alt: false, win: false },
                                 AKind::Mouse => Action::Mouse { button: MouseButton::Left },
                                 AKind::ScrollUp => Action::ScrollUp,
@@ -412,19 +456,31 @@ impl App {
                         chosen.sort();
                         m.with = chosen;
                         ui.add_space(10.0);
+                        if m.action != Action::AppSwitcherHold {
                         ui.checkbox(&mut m.mute, crate::i18n::tr("Hide from game"))
                             .on_hover_text(if m.is_combo() {
                                 crate::i18n::tr("While the combo is held, the virtual controller doesn't see these buttons.")
                             } else {
                                 crate::i18n::tr("The virtual controller never sees this button. Needs a virtual controller.")
                             });
+                        }
+                        if button(ui, crate::i18n::tr("Copy to profile…")).clicked() { copy_request = Some(m.clone()); }
                     });
-                    let held = matches!(m.action, Action::HoldProfile { .. });
+                    let held = matches!(m.action, Action::HoldProfile { .. } | Action::AppSwitcherHold);
+                    let navigation = matches!(m.action, Action::AppSwitcherNext | Action::AppSwitcherPrevious);
+                    if held && m.action == Action::AppSwitcherHold {
+                        m.gesture = Gesture::Press;
+                        m.mode = HoldStyle::Hold;
+                        muted(ui, crate::i18n::tr("Arms the switcher without pressing Alt. Next and Previous must use the same base button and all these extra buttons, plus at least one more. Configure each prefix button above to control game pass-through."));
+                    }
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(crate::i18n::tr("Behavior")).size(12.5).color(MUTED));
                         if held {
                             // The profile lasts as long as the hold.
                             ui.label(RichText::new(crate::i18n::tr("While held")).size(12.5).color(TEXT));
+                        } else if navigation {
+                            segmented(ui, &mut m.mode, &[(HoldStyle::Tap, crate::i18n::tr("Tap")), (HoldStyle::Turbo, "Turbo")]);
+                            if !matches!(m.mode, HoldStyle::Tap | HoldStyle::Turbo) { m.mode = HoldStyle::Tap; }
                         } else {
                             fit(ui, 290.0);
                             segmented(
@@ -454,6 +510,21 @@ impl App {
                             _ => {}
                         }
                     });
+                    for (_, other, kind) in warnings.iter().filter(|w| w.0 == i) {
+                        let message = match kind {
+                            WarningKind::Duplicate => "Duplicate trigger: both mappings will run.",
+                            WarningKind::Overlap => "Overlapping combos can run together when all their buttons are held.",
+                            WarningKind::Solo => "A solo action can run before a combo forms. Modifier consumption delays solo actions.",
+                            WarningKind::Gesture => "Press can fire before long press or double tap completes; gesture bindings do not cancel each other.",
+                            WarningKind::Leakage => "Combo buttons can reach the game before the combo forms, including after a timed modifier's delay.",
+                            WarningKind::NoSession => "App switching needs a Hold mapping with the same base button and a strict subset of these buttons.",
+                            WarningKind::NoVirtual => "Hiding buttons and consuming modifiers requires virtual controller output.",
+                        };
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(crate::i18n::tr(message)).color(WARN).size(12.0));
+                            if let Some(j) = other { muted(ui, &crate::localized_format!("See mapping {}", "Veja o mapeamento {}", "Ver asignación {}", j + 1)); }
+                        });
+                    }
                 });
             ui.add_space(8.0);
         }
@@ -463,6 +534,10 @@ impl App {
         }
         if let Some(c) = capture {
             self.capture_key = c;
+        }
+        if let Some(m) = copy_request {
+            self.mapping_copy = Some((p.name.clone(), m, Vec::new(), CopyPolicy::Skip));
+            ui.scroll_to_rect(egui::Rect::from_min_size(ui.min_rect().min, egui::vec2(1.0, 1.0)), Some(egui::Align::Min));
         }
         ui.horizontal(|ui| {
             if primary_button(ui, crate::i18n::tr("+ Add mapping")).clicked() {
@@ -487,5 +562,67 @@ impl App {
             crate::i18n::tr("Hold sends the output while held, Tap sends one click, Turbo repeats, Toggle latches on and off. Long press and double tap fire only when the gesture completes. Use profile while held switches while the button is down and goes back when it comes up; the virtual controller stays the same. Touchpad Left, Center, and Right follow the finger when the pad clicks: left of 640, the middle, and 1280 or further, on the 1920-wide pad. A click with no finger is Touchpad only. Hiding a zone from the game hides that click."),
             ACCENT,
         );
+    }
+
+    fn mapping_copy_editor(&mut self, ui: &mut egui::Ui, current: &mut Profile) {
+        if let Some((source, mapping, mut targets, mut policy)) = self.mapping_copy.take() {
+            let mut apply = false;
+            let mut cancel = false;
+            card(ui, crate::i18n::tr("Copy mapping"), &source, |ui| {
+                let buttons = mapping.buttons().map(|b| crate::i18n::tr(b.short_name())).collect::<Vec<_>>().join(" + ");
+                let action = match mapping.action {
+                    Action::Media { key } => crate::i18n::tr(key.label()),
+                    _ => crate::i18n::tr(KINDS.iter().find(|k| k.0 == akind(&mapping.action)).map(|k| k.1).unwrap_or("")),
+                };
+                ui.label(format!("{buttons} → {action}"));
+                muted(ui, crate::i18n::tr("Select destination profiles. Copies the entire mapping; each profile keeps its own modifier policies."));
+                for name in self.engine.profiles.names().into_iter().filter(|n| *n != source) {
+                    let mut selected = targets.contains(&name);
+                    let duplicates = self.engine.profiles.find(&name).map_or(0, |p| p.mappings.iter().filter(|m| mapping::same_trigger(m, &mapping)).count());
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.checkbox(&mut selected, &name).changed() {
+                            if selected { targets.push(name.clone()); } else { targets.retain(|n| *n != name); }
+                        }
+                        if duplicates != 0 { ui.label(RichText::new(crate::i18n::tr("Matching trigger exists")).color(WARN)); }
+                    });
+                }
+                segmented(ui, &mut policy, &[(CopyPolicy::Skip, crate::i18n::tr("Skip conflicts")), (CopyPolicy::Replace, crate::i18n::tr("Replace conflicts")), (CopyPolicy::KeepBoth, crate::i18n::tr("Keep both"))]);
+                ui.horizontal(|ui| {
+                    apply = ui.add_enabled(!targets.is_empty(), egui::Button::new(crate::i18n::tr("Copy selected"))).clicked();
+                    cancel = button(ui, crate::i18n::tr("Cancel")).clicked();
+                });
+            });
+            if apply {
+                self.capture_key = None;
+                let mut undo = Vec::new();
+                for name in targets {
+                    if let Some(p) = self.engine.profiles.find(&name) {
+                        let mut next = (*p).clone();
+                        if mapping::copy_mapping(&mut next, &mapping, policy) && next != *p {
+                            undo.push((name, p.mappings.clone(), next.mappings.clone()));
+                            if current.name == next.name { *current = next.clone(); }
+                            self.engine.profiles.update(next);
+                        }
+                    }
+                }
+                if undo.is_empty() { self.engine.toast(crate::i18n::tr("Nothing copied; matching triggers were skipped.")); }
+                else { self.mapping_copy_undo = undo; self.engine.toast(crate::i18n::tr("Mapping copied. Undo is available on this page.")); }
+            } else if !cancel { self.mapping_copy = Some((source, mapping, targets, policy)); }
+            ui.add_space(10.0);
+        }
+        if !self.mapping_copy_undo.is_empty() && button(ui, crate::i18n::tr("Undo last mapping copy")).clicked() {
+            self.capture_key = None;
+            let mut skipped = false;
+            for (name, before, after) in std::mem::take(&mut self.mapping_copy_undo) {
+                if let Some(p) = self.engine.profiles.find(&name) {
+                    let mut restored = (*p).clone();
+                    if mapping::undo_copy(&mut restored, &before, &after) {
+                        if current.name == restored.name { *current = restored.clone(); }
+                        self.engine.profiles.update(restored);
+                    } else { skipped = true; }
+                }
+            }
+            if skipped { self.engine.warn_toast(crate::i18n::tr("Undo skipped profiles whose mappings changed after copying.")); }
+        }
     }
 }

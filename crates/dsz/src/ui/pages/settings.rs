@@ -5,7 +5,7 @@ use crate::ui::widgets::*;
 use crate::ui::App;
 
 impl App {
-    pub(crate) fn page_settings(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn page_settings(&mut self, ui: &mut egui::Ui, profile: &mut crate::profile::Profile) {
         page_header(ui, crate::i18n::tr("Settings"), "");
         let engine = self.engine.clone();
         card(ui, crate::i18n::tr("Language"), "", |ui| {
@@ -75,6 +75,11 @@ impl App {
                         &mut s.minimize_to_tray,
                     );
                     let hint = crate::localized_format!("Every controller starts on \"{}\"; picking another profile still sticks until the app restarts", "Todos os controles iniciam em \"{}\"; outro perfil escolhido permanece até reiniciar o aplicativo", "Todos los mandos inician con \"{}\"; si eliges otro perfil, se mantiene hasta reiniciar la aplicación", s.default_profile);
+                    let mut badge_on = profile.lighting.tray_badge.mode != crate::tray_badge::ColorMode::Off;
+                    if toggle_row(ui, crate::i18n::tr("Battery percentage on tray icon"),
+                        crate::i18n::tr("Same setting as Lighting → Tray battery badge, saved in this profile."), &mut badge_on) {
+                        profile.lighting.tray_badge.set_enabled(badge_on);
+                    }
                     changed |= toggle_row(
                         ui,
                         crate::i18n::tr("Start on the default profile"),

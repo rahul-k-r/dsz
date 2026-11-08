@@ -44,6 +44,52 @@ impl App {
         let now = Instant::now();
         let loud = self.engine.audio.loudness();
 
+        card(ui, crate::i18n::tr("Tray battery badge"), "", |ui| {
+            let badge = &mut p.lighting.tray_badge;
+            let mut mode = badge.mode;
+            segmented(ui, &mut mode, &[
+                (crate::tray_badge::ColorMode::Off, crate::i18n::tr("Off")),
+                (crate::tray_badge::ColorMode::Static, crate::i18n::tr("Static")),
+                (crate::tray_badge::ColorMode::Battery, crate::i18n::tr("Battery")),
+            ]);
+            if mode != badge.mode { badge.set_mode(mode); }
+            if mode == crate::tray_badge::ColorMode::Static {
+                row(ui, crate::i18n::tr("Text color"), "", |ui| { color_picker::color_edit_button_srgb(ui, &mut badge.color); });
+                if let Some(c) = swatches(ui, badge.color, &SWATCHES) { badge.color = c; }
+            }
+            if mode == crate::tray_badge::ColorMode::Battery {
+                muted(ui, crate::i18n::tr("Uses the lightbar's red, amber, and green battery gradient directly."));
+            }
+            if mode != crate::tray_badge::ColorMode::Off {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(crate::i18n::tr("Display"));
+                    egui::ComboBox::from_id_salt("battery-display").width(240.0)
+                        .selected_text(crate::i18n::tr(match badge.display {
+                            crate::tray_badge::Display::Overlay => "Overlay on DSZ icon",
+                            crate::tray_badge::Display::Replace => "Battery only when connected",
+                            crate::tray_badge::Display::Separate => "Separate battery icon",
+                        })).show_ui(ui, |ui| {
+                            ui.selectable_value(&mut badge.display, crate::tray_badge::Display::Overlay, crate::i18n::tr("Overlay on DSZ icon"));
+                            ui.selectable_value(&mut badge.display, crate::tray_badge::Display::Replace, crate::i18n::tr("Battery only when connected"));
+                            ui.selectable_value(&mut badge.display, crate::tray_badge::Display::Separate, crate::i18n::tr("Separate battery icon"));
+                        });
+                });
+                if badge.display == crate::tray_badge::Display::Separate {
+                    muted(ui, crate::i18n::tr("The extra icon exists only while connected. Use Windows tray settings or drag it out of overflow to keep it visible independently of DSZ."));
+                }
+                let percent = dev.map(|_| input.battery_percent).unwrap_or(80);
+                let (state, color) = crate::tray_badge::appearance(badge, Some(percent));
+                let rgba = crate::tray_badge::render(32, state, color, badge.display != crate::tray_badge::Display::Overlay);
+                let texture = ui.ctx().load_texture("tray-badge-preview", egui::ColorImage::from_rgba_unmultiplied([32,32], &rgba), egui::TextureOptions::NEAREST);
+                ui.horizontal(|ui| {
+                    ui.image((texture.id(), egui::vec2(48.0,48.0)));
+                    muted(ui, crate::i18n::tr("The background automatically contrasts with the text. Preview uses 80% without a controller."));
+                });
+            }
+            muted(ui, crate::i18n::tr("Saved in this profile. The tray follows the lowest-battery connected controller's active profile, or the default profile when disconnected. Settings uses the same switch."));
+        });
+        ui.add_space(12.0);
+
         two_columns(ui, |ui, col| {
             if col == 0 {
                 card(ui, crate::i18n::tr("Lightbar"), "", |ui| {

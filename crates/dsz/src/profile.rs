@@ -72,6 +72,7 @@ pub enum MuteLed {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Lighting {
+    pub tray_badge: crate::tray_badge::Style,
     pub mode: LightMode,
     pub color: [u8; 3],
     /// Second color: breathing fades between `color` and this; strobe alternates.
@@ -104,6 +105,7 @@ pub struct Lighting {
 impl Default for Lighting {
     fn default() -> Self {
         Lighting {
+            tray_badge: Default::default(),
             mode: LightMode::Static,
             color: [0x2D, 0x7F, 0xF9],
             color2: [0x00, 0x00, 0x00],
@@ -635,6 +637,9 @@ pub enum Action {
     Media {
         key: MediaKey,
     },
+    AppSwitcherHold,
+    AppSwitcherNext,
+    AppSwitcherPrevious,
     NextProfile,
     PreviousProfile,
     ToggleGyroMouse,
@@ -1005,6 +1010,7 @@ pub struct Profile {
     pub gyro: Gyro,
     pub sticks: Sticks,
     pub mappings: Vec<Mapping>,
+    pub modifiers: Vec<crate::mapping::Modifier>,
     #[serde(rename = "virtual")]
     pub virtual_out: VirtualOutput,
 }
@@ -1022,6 +1028,7 @@ impl Default for Profile {
             gyro: Gyro::default(),
             sticks: Sticks::default(),
             mappings: Vec::new(),
+            modifiers: Vec::new(),
             virtual_out: VirtualOutput::default(),
         }
     }

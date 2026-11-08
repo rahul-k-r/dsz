@@ -17,6 +17,17 @@ pub fn tick(ctx: &egui::Context, frames: u64) {
             for size in [16, 20, 24, 32, 48, 64, 256] {
                 let f = std::path::Path::new(&dir).join(format!("icon_{size}.rgba"));
                 let _ = std::fs::write(f, crate::icon_art::icon_rgba(size));
+                for badge in [crate::tray_badge::Badge::Level(80), crate::tray_badge::Badge::Level(100), crate::tray_badge::Badge::Disconnected] {
+                    let mut rgba = crate::icon_art::icon_rgba(size);
+                    crate::tray_badge::paint(size, &mut rgba, badge, [45, 127, 249]);
+                    let img = egui::ColorImage::from_rgba_unmultiplied([size, size], &rgba);
+                    let f = std::path::Path::new(&dir).join(format!("badge_{size}_{badge:?}.bmp"));
+                    let _ = std::fs::write(f, bmp(&img));
+                    let rgba = crate::tray_badge::render(size, badge, [45,127,249], true);
+                    let img = egui::ColorImage::from_rgba_unmultiplied([size,size], &rgba);
+                    let f = std::path::Path::new(&dir).join(format!("battery_only_{size}_{badge:?}.bmp"));
+                    let _ = std::fs::write(f, bmp(&img));
+                }
             }
         }
     }

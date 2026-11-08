@@ -12,11 +12,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::engine::Engine;
 use crate::platform::wide;
+use crate::tray_badge::Badge;
 
 const WM_TRAY: u32 = WM_APP + 1;
 const ID_SHOW: usize = 1;
 const ID_QUIT: usize = 2;
 const ID_PROFILE_BASE: usize = 100;
+// Independent from the main icon, so Explorer can distinguish their
+// visibility preferences across application restarts.
+const BATTERY_GUID: windows_sys::core::GUID = windows_sys::core::GUID {
+    data1: 0x82886fea, data2: 0x0abd, data3: 0x43cc, data4: [0x9b,0x0d,0x73,0xab,0x98,0x41,0x62,0xb0],
+};
 
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
 static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -68,22 +74,22 @@ pub use crate::icon_art::icon_rgba;
 
 /// The tray icon at the size Windows wants: the multi-size icon embedded
 /// in the exe (resource 1, see `build.rs`), else drawn here.
-unsafe fn make_hicon() -> HICON {
+unsafe fn make_hicon(badge: Badge, color: [u8; 3], battery_only: bool) -> HICON {
     let cx = GetSystemMetrics(SM_CXSMICON).max(16);
     let cy = GetSystemMetrics(SM_CYSMICON).max(16);
-    let h = LoadImageW(
+    let h = if badge == Badge::Off || (battery_only && badge == Badge::Disconnected) { LoadImageW(
         GetModuleHandleW(null()),
         1 as _,
         IMAGE_ICON,
         cx,
         cy,
         LR_DEFAULTCOLOR,
-    );
+    ) } else { null_mut() };
     if !h.is_null() {
         return h as HICON;
     }
     let size = cx as usize;
-    let rgba = icon_rgba(size);
+    let rgba = crate::tray_badge::render(size, badge, color, battery_only);
     // CreateIcon wants BGRA for the color plane and a 1-bpp AND mask.
     let mut bgra = vec![0u8; size * size * 4];
     for i in 0..size * size {
@@ -276,16 +282,35 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
             nid.uID = 1;
             nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             nid.uCallbackMessage = WM_TRAY;
-            nid.hIcon = make_hicon();
+            let mut main_state = (Badge::Off, [0; 3], false);
+            nid.hIcon = make_hicon(main_state.0, main_state.1, main_state.2);
             set_tip(&mut nid, "DSZ");
             Shell_NotifyIconW(NIM_ADD, &nid);
+            let mut battery_nid: NOTIFYICONDATAW = std::mem::zeroed();
+            battery_nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+            battery_nid.hWnd = hwnd;
+            battery_nid.uID = 2;
+            battery_nid.guidItem = BATTERY_GUID;
+            battery_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_GUID;
+            battery_nid.uCallbackMessage = WM_TRAY;
+            let mut battery_added = false;
+            let mut battery_state = None;
 
-            // Update the tooltip with battery levels now and then.
-            SetTimer(hwnd, 1, 5000, None);
+            // Read cached state only: icon changes add no controller traffic.
+            SetTimer(hwnd, 1, 500, None);
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
                 if msg.message == WM_TIMER {
                     let devs = engine.device_list();
+                    let chosen = devs.iter().min_by_key(|d| d.live.lock().input.battery_percent);
+                    let name = chosen.map(|d| engine.profile_name_for(d)).unwrap_or_else(|| engine.settings.read().default_profile.clone());
+                    let percent = chosen.map(|d| d.live.lock().input.battery_percent.min(100));
+                    let style = engine.profiles.find(&name).map(|p| p.lighting.tray_badge.clone()).unwrap_or_default();
+                    let plan = crate::tray_badge::display_plan(&style, percent);
+                    let old_icon = if plan.main != main_state {
+                        let next = make_hicon(plan.main.0, plan.main.1, plan.main.2);
+                        if !next.is_null() { main_state = plan.main; std::mem::replace(&mut nid.hIcon, next) } else { null_mut() }
+                    } else { null_mut() };
                     let tip = if devs.is_empty() {
                         "DSZ — no controller".to_string()
                     } else {
@@ -303,11 +328,70 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
                     };
                     set_tip(&mut nid, &tip);
                     Shell_NotifyIconW(NIM_MODIFY, &nid);
+                    if !old_icon.is_null() { DestroyIcon(old_icon); }
+                    if let Some(state) = plan.separate {
+                        let old = if battery_state != Some(state) || battery_nid.hIcon.is_null() {
+                            let next = make_hicon(state.0, state.1, true);
+                            if !next.is_null() { battery_state = Some(state); std::mem::replace(&mut battery_nid.hIcon, next) } else { null_mut() }
+                        } else { null_mut() };
+                        set_tip(&mut battery_nid, &format!("DSZ battery — {}%", percent.unwrap_or(0)));
+                        if !battery_nid.hIcon.is_null() {
+                            let operation = if battery_added { NIM_MODIFY } else { NIM_ADD };
+                            battery_added = Shell_NotifyIconW(operation, &battery_nid) != 0;
+                        }
+                        if !old.is_null() { DestroyIcon(old); }
+                    } else {
+                        if battery_added { Shell_NotifyIconW(NIM_DELETE, &battery_nid); battery_added = false; }
+                        if !battery_nid.hIcon.is_null() { DestroyIcon(battery_nid.hIcon); battery_nid.hIcon = null_mut(); }
+                        battery_state = None;
+                    }
                 }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
             Shell_NotifyIconW(NIM_DELETE, &nid);
+            if battery_added { Shell_NotifyIconW(NIM_DELETE, &battery_nid); }
+            if !battery_nid.hIcon.is_null() { DestroyIcon(battery_nid.hIcon); }
+            if !nid.hIcon.is_null() { DestroyIcon(nid.hIcon); }
         })
         .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::Graphics::Gdi::*;
+
+    #[test]
+    fn windows_icon_keeps_colored_badge_and_opaque_background_over_white() {
+        for battery_only in [false, true] {
+        unsafe {
+            let size = GetSystemMetrics(SM_CXSMICON).max(16) as usize;
+            let icon = make_hicon(Badge::Level(80), [255, 0, 0], battery_only);
+            assert!(!icon.is_null());
+            let dc = CreateCompatibleDC(null_mut());
+            let mut info: BITMAPINFO = std::mem::zeroed();
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = size as i32;
+            info.bmiHeader.biHeight = -(size as i32);
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            let mut pixels = null_mut();
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut pixels, null_mut(), 0);
+            assert!(!bitmap.is_null() && !pixels.is_null());
+            let old = SelectObject(dc, bitmap);
+            let data = std::slice::from_raw_parts_mut(pixels as *mut u8, size * size * 4);
+            data.fill(255);
+            let drawn = DrawIconEx(dc, 0, 0, icon, size as i32, size as i32, 0, null_mut(), DI_NORMAL);
+            GdiFlush();
+            let result = data.to_vec();
+            SelectObject(dc, old); DeleteObject(bitmap); DeleteDC(dc); DestroyIcon(icon);
+            assert_ne!(drawn, 0);
+            assert!(result.chunks_exact(4).any(|p| p[..3] == [0, 0, 255]), "Windows must draw the selected red text");
+            let left = size - (7 * (size / 16).max(1) + 2);
+            assert_eq!(&result[left * 4..left * 4 + 3], &[0, 0, 0], "badge background must cover the white icon at the top right");
+            if battery_only { assert!(result.chunks_exact(4).all(|p| p[..3] == [0,0,0] || p[..3] == [0,0,255])); }
+        }
+        }
+    }
 }
