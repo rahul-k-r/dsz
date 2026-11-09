@@ -30,6 +30,13 @@ def release_version(release, current):
     return match[0] if published > installed else None
 
 
+def synced_version(tag, current):
+    match = re.fullmatch(r"\d+\.\d+\.\d+\+custom\.([1-9]\d*)", current, re.ASCII)
+    if not match:
+        raise ValueError(f"Expected a custom release revision in {current}")
+    return f"{tag[1:]}+custom.{match[1]}"
+
+
 def set_version(path, contents, version):
     if path == "Cargo.toml":
         headers = (r"\[workspace\.package\]",)
@@ -113,7 +120,7 @@ def main():
     else:
         run("git", "config", "user.name", "github-actions[bot]")
         run("git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-        head, conflicts = prepare_merge(upstream, f"{tag[1:]}+custom.1")
+        head, conflicts = prepare_merge(upstream, synced_version(tag, current))
         run("git", "push", "origin", f"{head}:{ref}")
 
     body = f"Integrate [upstream DSZ {tag}](https://github.com/{UPSTREAM}/releases/tag/{tag}).\n\n"
