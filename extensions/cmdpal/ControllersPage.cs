@@ -5,22 +5,38 @@ namespace DszBattery;
 
 internal sealed partial class ControllersPage : ListPage
 {
-    public ControllersPage()
+    private readonly bool includeProfiles;
+    private string? profileError;
+
+    public ControllersPage(bool includeProfiles = false)
     {
-        Id = "dsz.controllers";
-        Title = "DSZ Controllers";
-        Name = "View controllers";
+        this.includeProfiles = includeProfiles;
+        Id = includeProfiles ? "dsz.dock-controls" : "dsz.controllers";
+        Title = includeProfiles ? "DSZ Controls" : "DSZ Controllers";
+        Name = includeProfiles ? "View controllers and switch profiles" : "View controllers";
     }
 
     public override IListItem[] GetItems()
     {
         var state = ProfileConnection.Send();
+        if (includeProfiles && state is not null)
+            return DockItems(state, profileError, SwitchProfile, RunAction);
         if (state?.controllers is null)
             return [new ListItem(new NoOpCommand()) { Title = "Start a DSZ build with controller controls" }];
         if (state.controllers.Length == 0)
             return [new ListItem(new NoOpCommand()) { Title = "No controller connected" }];
 
         return Items(state, RunAction);
+    }
+
+    internal static IListItem[] DockItems(ProfileState state, string? error, Action<string> select,
+        Func<ulong, string, ICommandResult> run) =>
+        [.. ProfilesPage.Items(state, error, select), .. Items(state, run)];
+
+    private void SwitchProfile(string profile)
+    {
+        profileError = ProfileConnection.Send(profile)?.applied == true ? null : "DSZ could not switch profiles";
+        RaiseItemsChanged();
     }
 
     internal static IListItem[] Items(ProfileState state, Func<ulong, string, ICommandResult> run) =>

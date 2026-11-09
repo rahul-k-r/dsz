@@ -28,8 +28,8 @@ internal static class Program
             var commands = provider.TopLevelCommands();
             var batteryStatus = commands.Single(command => command.Title == "DSZ Battery");
             string? selected = null;
-            var profiles = ProfilesPage.Items(state,
-                null, profile => selected = profile);
+            var profiles = ControllersPage.DockItems(state,
+                null, profile => selected = profile, (_, _) => CommandResult.KeepOpen());
             ((IInvokableCommand)profiles[2].Command).Invoke(profiles[2]);
             var device = ControllersPage.Items(state, (_, _) => CommandResult.KeepOpen()).Single();
             var shortcut = commands.Single(command => command.Title == "DSZ Racing");
@@ -46,10 +46,12 @@ internal static class Program
                 && batteryStatus.Command is NoOpCommand
                 && batteryStatus.Subtitle == "No controller connected"
                 && profiles[2].Icon?.Light?.Data is not null
-                && shortcut.Icon?.Light?.Data is not null
+                && shortcut.Icon == provider.Icon
                 && provider.GetCommandItem(shortcut.Command.Id) == shortcut
-                && dockPage.GetItems()[0].Command.Id == "dsz.controllers"
-                && dockPage.GetItems()[1].Command.Id == "dsz.controller-profiles"
+                && dockPage.GetItems().Single().Command.Id == "dsz.dock-controls"
+                && dockPage.GetItems().Single().Subtitle == "Default"
+                && dockPage.GetItems().Single().Icon == provider.Icon
+                && profiles[3].Title == "DualSense"
                 && device.Subtitle == "80% · USB · Default"
                 && device.MoreCommands.Length == 1
                 && profiles[0].Title == "Active: Default" && profiles[1].Subtitle == "Active"
@@ -94,7 +96,6 @@ internal sealed partial class BatteryProvider : CommandProvider, IDisposable
 {
     private readonly CommandItem item;
     private readonly ListItem dockStatus;
-    private readonly ListItem dockProfile;
     private readonly WrappedDockItem dockBand;
     private readonly Timer? timer;
     private readonly ProfilesPage profiles = new();
@@ -112,9 +113,8 @@ internal sealed partial class BatteryProvider : CommandProvider, IDisposable
         Icon = IconHelpers.FromRelativePath("Assets\\Square44.png");
         item = new CommandItem(new NoOpCommand { Id = "dsz.controller-battery.readout" })
             { Title = DisplayName, Icon = Icon };
-        dockStatus = new ListItem(controllers) { Icon = Icon };
-        dockProfile = new ListItem(profiles) { Title = "Profiles", Icon = Icon };
-        dockBand = new WrappedDockItem([dockStatus, dockProfile], "dsz.controller-battery.dock", DisplayName);
+        dockStatus = new ListItem(new ControllersPage(includeProfiles: true)) { Icon = Icon };
+        dockBand = new WrappedDockItem([dockStatus], "dsz.controller-battery.dock", DisplayName);
         profilesItem = new CommandItem(profiles) { Title = profiles.Title, Icon = Icon };
         controllersItem = new CommandItem(controllers) { Title = controllers.Title, Icon = Icon };
         Refresh(Battery.Read());
@@ -130,7 +130,6 @@ internal sealed partial class BatteryProvider : CommandProvider, IDisposable
         item.Subtitle = label;
         // Compact Dock hides subtitles, so keep the charge in the title.
         dockStatus.Title = value is >= 2 and <= 102 ? label : "—";
-        dockStatus.Subtitle = value is >= 2 and <= 102 ? DisplayName : label;
     }
 
     private void RefreshFromDsz()
@@ -151,17 +150,11 @@ internal sealed partial class BatteryProvider : CommandProvider, IDisposable
     internal void UpdateProfiles(ProfileState? state)
     {
         var active = state?.active.Distinct(StringComparer.Ordinal).ToArray() ?? [];
-        var title = active is [var name] ? name : "Profiles";
-        if (dockProfile.Title != title)
-            dockProfile.Title = title;
-        var subtitle = active.Length == 0 ? "DSZ profiles" : string.Join(", ", active);
-        if (dockProfile.Subtitle != subtitle)
-            dockProfile.Subtitle = subtitle;
-        var icon = active is [var profile] ? ProfileIcons.For(state!, profile) ?? Icon : Icon;
-        if (dockProfile.Icon != icon)
-            dockProfile.Icon = icon;
+        var subtitle = string.Join(", ", active);
+        if (dockStatus.Subtitle != subtitle)
+            dockStatus.Subtitle = subtitle;
 
-        var signature = state is null ? "" : JsonSerializer.Serialize(new { state.profiles, state.colors });
+        var signature = state is null ? "" : JsonSerializer.Serialize(state.profiles);
         if (profileSignature == signature)
             return;
         profileSignature = signature;
@@ -169,7 +162,7 @@ internal sealed partial class BatteryProvider : CommandProvider, IDisposable
             new ControllerAction(() => ProfileConnection.Send(profile)?.applied == true
                 ? CommandResult.Dismiss() : CommandResult.ShowToast("DSZ could not switch profiles"))
             { Id = $"dsz.profile.{Convert.ToHexString(Encoding.UTF8.GetBytes(profile))}" })
-            { Title = $"DSZ {profile}", Icon = ProfileIcons.For(state, profile) ?? Icon }).ToArray() ?? [];
+            { Title = $"DSZ {profile}", Icon = Icon }).ToArray() ?? [];
         RaiseItemsChanged();
     }
 
