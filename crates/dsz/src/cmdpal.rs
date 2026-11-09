@@ -79,7 +79,7 @@ fn handle(mut stream: TcpStream, engine: &Engine, token: &str) -> std::io::Resul
         serde_json::json!({
             "id": device.id,
             "name": device.model.name(),
-            "battery": device.live.lock().input.battery_percent.min(100),
+            "battery": device.live.lock().input.battery_shown().min(100),
             "bluetooth": bluetooth,
             "profile": profile,
             "identify": device.has_output,

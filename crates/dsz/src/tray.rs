@@ -303,9 +303,9 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
             while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
                 if msg.message == WM_TIMER {
                     let devs = engine.device_list();
-                    let chosen = devs.iter().min_by_key(|d| d.live.lock().input.battery_percent);
+                    let chosen = devs.iter().min_by_key(|d| d.live.lock().input.battery_shown());
                     let name = chosen.map(|d| engine.profile_name_for(d)).unwrap_or_else(|| engine.settings.read().default_profile.clone());
-                    let percent = chosen.map(|d| d.live.lock().input.battery_percent.min(100));
+                    let percent = chosen.map(|d| d.live.lock().input.battery_shown().min(100));
                     if published != Some(percent) && SetPropW(hwnd, BATTERY_PROPERTY, battery_property(percent)) != 0 {
                         published = Some(percent);
                     }
@@ -324,7 +324,7 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
                                 format!(
                                     "{} {}%",
                                     d.model.name(),
-                                    d.live.lock().input.battery_percent
+                                    d.live.lock().input.battery_shown()
                                 )
                             })
                             .collect();
