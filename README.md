@@ -10,7 +10,7 @@ With update checks enabled, DSZ checks upstream once after startup. It shows a n
 
 For an upstream-only update, keep the custom revision: `0.4.7+custom.6` becomes `0.4.8+custom.6`. When the release also adds fork changes, increment it once: `0.4.8+custom.7`. The scheduled sync carries the revision forward. Update the workspace and lockfile together.
 
-Tag the verified commit with `v<version>`, then publish a non-prerelease GitHub release with `dsz.exe` as an asset and mark it latest. The updater uses GitHub's SHA-256 asset digest. Builds downloaded from the original upstream repository use its update channel; install this fork's executable once to switch channels.
+Push a `v<version>` tag pointing to a commit on `custom` to publish. GitHub Actions verifies the tag against the workspace version, runs the Windows tests, builds DSZ and the Command Palette extension, and publishes both to the same GitHub release if the checks pass. The updater uses GitHub's SHA-256 asset digest for `dsz.exe`. Builds downloaded from the original upstream repository use its update channel; install this fork's executable once to switch channels.
 
 **DSZ - DualSense Zen** is a fast, native Windows companion for the PlayStation DualSense, DualSense Edge, and DualShock 4 controllers, written in Rust: lighting, adaptive triggers, Bluetooth haptics and speaker audio, gyro and touchpad mouse, button mapping, virtual Xbox 360 / DualSense / DualShock 4 controllers, and per-game profiles.
 

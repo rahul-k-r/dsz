@@ -18,8 +18,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Install Rust
         run: rustup toolchain install 1.94.1 --profile minimal --no-self-update
+      - name: Verify release tag
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -cnotmatch '^v\d+\.\d+\.\d+\+custom\.[1-9]\d*$') { throw "Invalid release tag: $tag" }
+          $version = (cargo +1.94.1 metadata --no-deps --format-version 1 --locked | ConvertFrom-Json).packages |
+            Where-Object Name -eq 'dsz' | Select-Object -ExpandProperty version
+          if ($LASTEXITCODE -ne 0 -or "v$version" -cne $tag) { throw "Tag $tag does not match DSZ version $version" }
+          git merge-base --is-ancestor HEAD refs/remotes/origin/custom
+          if ($LASTEXITCODE -ne 0) { throw 'Release commit must be on the custom branch.' }
       - name: Test
         run: cargo +1.94.1 test --workspace --locked
       - name: Build
@@ -48,3 +60,44 @@ jobs:
             target/cmdpal-package/DszBattery-x64.msix
             target/cmdpal-package/DszBattery-x64.zip
           if-no-files-found: error
+
+  publish:
+    if: github.repository == 'rahul-k-r/dsz' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-custom-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: DSZ-*
+          path: release
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName,isLatest --jq '.[] | select(.isLatest) | .tagName')
+          python3 - "$GITHUB_REF_NAME" "$latest" <<'PY'
+          import re
+          import sys
+
+          def version(tag):
+              match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)\+custom\.([1-9]\d*)", tag)
+              return tuple(map(int, match.groups())) if match else None
+
+          requested, latest = map(version, sys.argv[1:])
+          if requested is None or (latest is not None and requested <= latest):
+              raise SystemExit("Release tag must be newer than the latest custom release.")
+          PY
+          notes_base=()
+          if [[ -n "$latest" ]]; then notes_base=(--notes-start-tag "$latest"); fi
+          gh release create "$GITHUB_REF_NAME" \
+            release/dsz.exe release/DszBattery-x64.zip release/DszBattery-x64.msix \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --latest --generate-notes "${notes_base[@]}" \
+            --title "DSZ ${GITHUB_REF_NAME#v}" \
+            --notes "Download dsz.exe for DSZ. The optional Command Palette ZIP installs separately. See [installation instructions](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md). The MSIX is unsigned."
