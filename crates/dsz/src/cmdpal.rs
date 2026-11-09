@@ -15,6 +15,15 @@ use crate::engine::Engine;
 struct Request {
     token: String,
     profile: Option<String>,
+    device: Option<u64>,
+    action: Option<DeviceAction>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum DeviceAction {
+    Identify,
+    PowerOff,
 }
 
 fn request(reader: impl Read, token: &str) -> Option<Request> {
@@ -32,16 +41,56 @@ fn handle(mut stream: TcpStream, engine: &Engine, token: &str) -> std::io::Resul
     stream.set_read_timeout(timeout)?;
     stream.set_write_timeout(timeout)?;
     let Some(request) = request(&stream, token) else { return Ok(()); };
-    let applied = request.profile.as_deref().is_none_or(|name| engine.select_profile(name));
     let devices = engine.device_list();
+    let applied = match (request.device, request.profile.as_deref(), request.action) {
+        (None, None, None) => true,
+        (None, Some(profile), None) => engine.select_profile(profile),
+        (Some(id), profile, action) => devices.iter().find(|device| device.id == id)
+            .is_some_and(|device| match (profile, action) {
+                (Some(name), None) if engine.profiles.find(name).is_some() => {
+                    engine.set_device_profile(device, name);
+                    device.identify_light();
+                    true
+                }
+                (None, Some(DeviceAction::Identify)) if device.has_output => {
+                    device.identify_light();
+                    true
+                }
+                (None, Some(DeviceAction::PowerOff)) if device.is_bluetooth() => {
+                    let mac = device.mac.lock().clone();
+                    !mac.is_empty() && std::thread::Builder::new().spawn(move || {
+                        crate::platform::bt_disconnect(&mac);
+                    }).is_ok()
+                }
+                _ => false,
+            }),
+        _ => false,
+    };
     let active = if devices.is_empty() {
         vec![engine.settings.read().default_profile.clone()]
     } else {
         devices.iter().map(|device| engine.profile_name_for(device)).collect()
     };
+    let profiles = engine.profiles.all();
+    let colors: std::collections::BTreeMap<_, _> = profiles.iter()
+        .map(|profile| (&profile.name, profile.lighting.color)).collect();
+    let controllers: Vec<_> = devices.iter().zip(&active).map(|(device, profile)| {
+        let bluetooth = device.is_bluetooth();
+        serde_json::json!({
+            "id": device.id,
+            "name": device.model.name(),
+            "battery": device.live.lock().input.battery_percent.min(100),
+            "bluetooth": bluetooth,
+            "profile": profile,
+            "identify": device.has_output,
+            "powerOff": bluetooth && !device.mac.lock().is_empty(),
+        })
+    }).collect();
     let reply = serde_json::json!({
         "active": active,
         "profiles": engine.profiles.names(),
+        "colors": colors,
+        "controllers": controllers,
         "applied": applied,
     });
     serde_json::to_writer(&mut stream, &reply)?;
@@ -92,6 +141,7 @@ mod tests {
             .unwrap().profile.as_deref(), Some("Rocket League"));
         assert!(parse("{\"token\":\"a:b\"}\n").unwrap().profile.is_none());
         assert!(parse("{\"token\":\"a:c\"}\n").is_none());
+        assert!(parse("{\"token\":\"a:b\",\"device\":1,\"action\":\"unsupported\"}\n").is_none());
         assert!(parse("{\"token\":\"a:b\"}").is_none());
         assert!(parse(&format!("{{\"token\":\"a:b\",\"profile\":\"{}\"}}\n", "a".repeat(4096))).is_none());
     }
@@ -115,6 +165,8 @@ mod tests {
             serde_json::from_reader::<_, serde_json::Value>(client).unwrap()
         };
         assert_eq!(exchange(None)["active"], serde_json::json!([initial]));
+        assert!(exchange(None)["colors"][&initial].is_array());
+        assert_eq!(exchange(None)["controllers"], serde_json::json!([]));
         assert_eq!(exchange(Some(&other))["active"], serde_json::json!([other]));
         assert_eq!(exchange(Some("missing profile"))["applied"], false);
         assert_eq!(exchange(None)["active"], serde_json::json!([other]));

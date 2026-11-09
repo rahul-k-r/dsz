@@ -5,7 +5,7 @@
          xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
          IgnorableNamespaces="uap uap3 com rescap">
-  <Identity Name="DSZ.ControllerBattery" Publisher="CN=DSZ Battery" Version="1.0.0.3" ProcessorArchitecture="x64" />
+  <Identity Name="DSZ.ControllerBattery" Publisher="CN=DSZ Battery" Version="1.0.0.5" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>DSZ Battery</DisplayName>
     <PublisherDisplayName>DSZ</PublisherDisplayName>

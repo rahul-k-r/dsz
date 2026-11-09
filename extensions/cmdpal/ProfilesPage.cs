@@ -8,11 +8,13 @@ namespace DszBattery;
 
 internal sealed partial class ProfilesPage : ListPage
 {
+    private readonly ulong? device;
     private string? error;
 
-    public ProfilesPage()
+    public ProfilesPage(ulong? device = null)
     {
-        Id = "dsz.controller-profiles";
+        this.device = device;
+        Id = device is null ? "dsz.controller-profiles" : $"dsz.controller-profiles.{device}";
         Title = "DSZ Profiles";
         Name = "View and switch profiles";
     }
@@ -23,6 +25,13 @@ internal sealed partial class ProfilesPage : ListPage
         if (state is null)
             return [new ListItem(new NoOpCommand()) { Title = "Start a DSZ build with profile support" }];
 
+        if (device is not null)
+        {
+            var controller = state.controllers?.FirstOrDefault(controller => controller.id == device);
+            if (controller is null)
+                return [new ListItem(new NoOpCommand()) { Title = "Controller disconnected" }];
+            state = state with { active = [controller.profile] };
+        }
         return Items(state, error, SwitchProfile);
     }
 
@@ -34,13 +43,14 @@ internal sealed partial class ProfilesPage : ListPage
             new ListItem(new SelectProfile(profile, select))
             {
                 Title = profile,
+                Icon = ProfileIcons.For(state, profile),
                 Subtitle = state.active.Contains(profile, StringComparer.Ordinal) ? "Active" : "Switch profile",
             })];
     }
 
     private void SwitchProfile(string profile)
     {
-        error = ProfileConnection.Send(profile)?.applied == true ? null : "DSZ could not switch profiles";
+        error = ProfileConnection.Send(profile, device)?.applied == true ? null : "DSZ could not switch profiles";
         RaiseItemsChanged();
     }
 }
@@ -54,11 +64,15 @@ internal sealed partial class SelectProfile(string profile, Action<string> selec
     }
 }
 
-internal sealed record ProfileState(string[] active, string[] profiles, bool applied);
+internal sealed record ProfileState(string[] active, string[] profiles, bool applied,
+    Dictionary<string, int[]>? colors = null, ControllerState[]? controllers = null);
+
+internal sealed record ControllerState(ulong id, string name, int battery, bool bluetooth,
+    string profile, bool identify, bool powerOff);
 
 internal static class ProfileConnection
 {
-    internal static ProfileState? Send(string? profile = null)
+    internal static ProfileState? Send(string? profile = null, ulong? device = null, string? action = null)
     {
         var port = Battery.TrayProperty("DSZ.CmdPal.Port");
         var first = (nuint)Battery.TrayProperty("DSZ.CmdPal.Key1");
@@ -72,7 +86,7 @@ internal static class ProfileConnection
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
             client.ConnectAsync(IPAddress.Loopback, (int)port, deadline.Token).AsTask().GetAwaiter().GetResult();
             using var stream = client.GetStream();
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(new { token = $"{first:x}:{second:x}", profile });
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(new { token = $"{first:x}:{second:x}", profile, device, action });
             stream.WriteAsync(bytes, deadline.Token).AsTask().GetAwaiter().GetResult();
             stream.WriteByte((byte)'\n');
             using var reader = new StreamReader(stream);

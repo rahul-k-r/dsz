@@ -111,6 +111,8 @@ The optional **DSZ Battery** extension for PowerToys Command Palette shows the l
 
 Search for **DSZ Profiles** to see the active profiles and select another profile. Like the tray menu, selecting a profile applies it to all connected controllers, or sets the default when none are connected.
 
+**DSZ Controllers** lists each controller's battery, connection type, and active profile. Select a controller to switch its profile, or use its action menu to identify it or power it off over Bluetooth. In the Dock band, select the percentage to open this list, or select the active profile to switch profiles. Search for **DSZ <profile name>** to switch directly or pin that shortcut to the Dock. Profile circles use the primary color saved on the profile's Lighting page.
+
 Use the matching `dsz.exe` and `DszBattery-x64.zip` from the Windows build artifacts. Extract the ZIP to a folder you intend to keep. With Windows Developer Mode enabled, run `Add-AppxPackage -Register <extracted-AppxManifest.xml>` in PowerShell, then reload Command Palette. The unsigned `DszBattery-x64.msix` is also available for signing.
 
 To build locally, use .NET 10 and the Windows SDK's x64 `makeappx.exe`. Run `extensions/cmdpal/Build-Package.ps1 -DszExe <built-dsz.exe> -MakeAppx <makeappx.exe> -Output <output-directory>`.
