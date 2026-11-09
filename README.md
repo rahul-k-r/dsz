@@ -4,9 +4,13 @@ This fork maintains custom mapping and tray features on the **custom** branch, b
 
 ### Maintaining this fork
 
+With update checks enabled, DSZ checks upstream once after startup. It shows a notice once per newer upstream version while a matching custom release is pending. Installable updates still come from this fork.
+
 `origin` is `rahul-k-r/dsz`; `upstream` is `MaximumFreak/dsz`. The custom branch contains the modifications, while main tracks upstream. To integrate upstream changes, fetch upstream, merge `upstream/main` into custom, resolve conflicts, and run `cargo test --workspace --locked` followed by `cargo build --release --locked`. Publish after both pass. Windows CI repeats these checks on pushes and pull requests to custom and uploads the executable as an artifact.
 
-For a custom release, set the workspace and lockfile versions to the upstream base plus the next `+custom.N` revision. Tag the verified commit with `v<version>`, then publish a non-prerelease GitHub release with `dsz.exe` as an asset and mark it latest. The updater uses GitHub's SHA-256 asset digest. Builds downloaded from the original upstream repository use its update channel; install this fork's executable once to switch channels.
+For an upstream-only update, keep the custom revision: `0.4.7+custom.6` becomes `0.4.8+custom.6`. When the release also adds fork changes, increment it once: `0.4.8+custom.7`. The scheduled sync carries the revision forward. Update the workspace and lockfile together.
+
+Tag the verified commit with `v<version>`, then publish a non-prerelease GitHub release with `dsz.exe` as an asset and mark it latest. The updater uses GitHub's SHA-256 asset digest. Builds downloaded from the original upstream repository use its update channel; install this fork's executable once to switch channels.
 
 **DSZ - DualSense Zen** is a fast, native Windows companion for the PlayStation DualSense, DualSense Edge, and DualShock 4 controllers, written in Rust: lighting, adaptive triggers, Bluetooth haptics and speaker audio, gyro and touchpad mouse, button mapping, virtual Xbox 360 / DualSense / DualShock 4 controllers, and per-game profiles.
 
@@ -113,7 +117,13 @@ Search for **DSZ Profiles** to see the active profiles and select another profil
 
 **DSZ Controllers** lists each controller's battery, connection type, and active profile. Select a controller to switch its profile, or use its action menu to identify it or power it off over Bluetooth. The Dock button shows the battery percentage above the active profile. Select it to open the profile choices and controller controls together. Search for **DSZ <profile name>** to switch directly or pin that shortcut to the Dock. Profile circles appear inside the selection menus and use the primary color saved on the profile's Lighting page.
 
-Use the matching `dsz.exe` and `DszBattery-x64.zip` from the Windows build artifacts. Extract the ZIP to a folder you intend to keep. With Windows Developer Mode enabled, run `Add-AppxPackage -Register <extracted-AppxManifest.xml>` in PowerShell, then reload Command Palette. The unsigned `DszBattery-x64.msix` is also available for signing.
+To install the optional extension:
+
+1. Download `dsz.exe` and `DszBattery-x64.zip` from the same [fork release](https://github.com/rahul-k-r/dsz/releases/latest).
+2. Extract the ZIP to a folder you intend to keep. With Windows Developer Mode enabled, open PowerShell in that folder and run `Add-AppxPackage -Register (Resolve-Path .\AppxManifest.xml).Path`.
+3. Run the matching `dsz.exe` and open Command Palette. If old entries remain after an extension update, fully quit and reopen Command Palette. To pin the battery button, go to **Command Palette Settings → Dock → Bands → DSZ Battery**.
+
+The DSZ updater installs only `dsz.exe`. Update the extension separately when you want a newer extension version. The release also includes an unsigned `DszBattery-x64.msix` for signing.
 
 To build locally, use .NET 10 and the Windows SDK's x64 `makeappx.exe`. Run `extensions/cmdpal/Build-Package.ps1 -DszExe <built-dsz.exe> -MakeAppx <makeappx.exe> -Output <output-directory>`.
 

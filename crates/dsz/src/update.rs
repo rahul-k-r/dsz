@@ -27,6 +27,7 @@ use parking_lot::Mutex;
 use crate::engine::Engine;
 
 const LATEST: &str = "https://api.github.com/repos/rahul-k-r/dsz/releases/latest";
+const UPSTREAM_LATEST: &str = "https://api.github.com/repos/MaximumFreak/dsz/releases/latest";
 pub const RELEASES: &str = "https://github.com/rahul-k-r/dsz/releases";
 /// The release asset that is the app.
 const ASSET: &str = "dsz.exe";
@@ -110,6 +111,7 @@ pub fn take_settings_request() -> bool {
 pub fn run(engine: Arc<Engine>) {
     let mut next = Instant::now() + FIRST_CHECK;
     let mut told: Option<String> = None;
+    let mut upstream_checked = false;
     while !engine.shutdown.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_secs(1));
         if Instant::now() < next || !engine.settings.read().check_updates {
@@ -130,6 +132,10 @@ pub fn run(engine: Arc<Engine>) {
                 );
                 told = Some(r.version);
             }
+        }
+        if !upstream_checked {
+            upstream_checked = true;
+            check_upstream(&engine);
         }
     }
 }
@@ -160,20 +166,82 @@ pub fn check_in_background(wake: impl Fn() + Send + 'static) {
 }
 
 fn latest() -> Result<Release, String> {
+    let text = release_json(LATEST, "latest-release.json")?;
+    parse(&text).ok_or_else(|| "GitHub's answer had no release in it.".to_string())
+}
+
+fn check_upstream(engine: &Engine) {
+    let text = match release_json(UPSTREAM_LATEST, "upstream-release.json") {
+        Ok(text) => text,
+        Err(error) => {
+            log::info!("upstream update check: {error}");
+            return;
+        }
+    };
+    let Some(version) = parse_upstream_version(&text) else { return; };
+    let custom = available();
+    let mut settings = engine.settings.write();
+    if !settings.check_updates || engine.shutdown.load(Ordering::Acquire)
+        || !should_notify_upstream(
+            &version, env!("CARGO_PKG_VERSION"),
+            custom.as_ref().map(|release| release.version.as_str()),
+            settings.upstream_update_seen.as_deref(),
+        )
+    {
+        return;
+    }
+    settings.upstream_update_seen = Some(version.clone());
+    drop(settings);
+    engine.settings_save_later();
+    log::info!("DSZ upstream {version} is available; waiting for a custom build");
+    crate::tray::notify(
+        &crate::localized_format!(
+            "DSZ upstream {} is available",
+            "DSZ original {} está disponível",
+            "DSZ original {} está disponible",
+            version
+        ),
+        crate::i18n::tr("The custom update will appear after the changes are merged and tested."),
+    );
+}
+
+fn parse_upstream_version(json: &str) -> Option<String> {
+    let release: serde_json::Value = serde_json::from_str(json).ok()?;
+    let tag = release["tag_name"].as_str()?;
+    let version = tag.strip_prefix('v').unwrap_or(tag);
+    let numbers: Vec<_> = version.split('.').collect();
+    if release["draft"].as_bool() == Some(true) || release["prerelease"].as_bool() == Some(true)
+        || numbers.len() != 3 || !numbers.iter().all(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                && number.parse::<u32>().is_ok()
+        })
+    {
+        return None;
+    }
+    Some(version.to_owned())
+}
+
+fn should_notify_upstream(version: &str, running: &str, custom: Option<&str>, seen: Option<&str>) -> bool {
+    let upstream_base = parts(version).0;
+    [Some(running), custom, seen].into_iter().flatten()
+        .all(|other| upstream_base > parts(other).0)
+}
+
+fn release_json(endpoint: &str, filename: &str) -> Result<String, String> {
     let dir = std::env::temp_dir().join("DSZ");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file = dir.join("latest-release.json");
+    let file = dir.join(filename);
     let _ = std::fs::remove_file(&file);
     // A fresh query each time, so a cached copy is never used.
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    crate::install::download(&format!("{LATEST}?t={t}"), &file)
+    crate::install::download(&format!("{endpoint}?t={t}"), &file)
         .map_err(|_| "Couldn't reach GitHub to check for updates.".to_string())?;
     let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&file);
-    parse(&text).ok_or_else(|| "GitHub's answer had no release in it.".to_string())
+    Ok(text)
 }
 
 fn parse(json: &str) -> Option<Release> {
@@ -429,6 +497,24 @@ mod tests {
         assert!(newer("0.4.8+custom.1", "0.4.7+custom.99"));
         assert!(!newer("0.4.7", "0.4.7+custom.1"));
         assert!(!newer("0.4.7+custom.1", "0.4.7+custom.1"));
+    }
+
+    #[test]
+    fn upstream_notice_waits_for_a_new_base_and_suppresses_repeats() {
+        assert!(should_notify_upstream("0.4.9", "0.4.8+custom.1", Some("0.4.8+custom.2"), None));
+        assert!(!should_notify_upstream("0.4.9", "0.4.8+custom.1", Some("0.4.9+custom.1"), None));
+        assert!(!should_notify_upstream("0.4.8", "0.4.8+custom.1", None, None));
+        assert!(!should_notify_upstream("0.4.9", "0.4.8+custom.1", None, Some("0.4.9")));
+        assert!(should_notify_upstream("0.4.10", "0.4.8+custom.1", None, Some("0.4.9")));
+    }
+
+    #[test]
+    fn upstream_notice_only_needs_a_stable_version_tag() {
+        assert_eq!(parse_upstream_version(r#"{"tag_name":"v0.4.9"}"#).as_deref(), Some("0.4.9"));
+        assert!(parse_upstream_version(r#"{"tag_name":"v0.4.9-beta.1"}"#).is_none());
+        assert!(parse_upstream_version(r#"{"tag_name":"v0.4.9","prerelease":true}"#).is_none());
+        assert!(parse_upstream_version(r#"{"tag_name":"v0.4.9","draft":true}"#).is_none());
+        assert!(parse_upstream_version(r#"{"message":"Not Found"}"#).is_none());
     }
 
     #[test]

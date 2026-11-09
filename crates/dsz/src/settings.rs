@@ -159,6 +159,8 @@ pub struct Settings {
     pub audio_on_virtual: [bool; 6],
     /// Ask GitHub once a day whether a newer release is out.
     pub check_updates: bool,
+    /// Newest upstream release for which this installation showed a notice.
+    pub upstream_update_seen: Option<String>,
     /// Motion server for emulators (cemuhook/DSU, UDP 26760).
     pub dsu_enabled: bool,
 }
@@ -201,6 +203,7 @@ impl Default for Settings {
             helper_nodes: BTreeMap::new(),
             audio_on_virtual: [false; 6],
             check_updates: true,
+            upstream_update_seen: None,
             dsu_enabled: false,
         }
     }

@@ -731,6 +731,8 @@
   "DSZ {} is available: Settings > Updates": "DSZ {} está disponível: Configurações > Atualizações",
   "DSZ {} is available": "DSZ {} está disponível",
   "Open DSZ and go to Settings to update.": "Abra o DSZ e vá a Configurações para atualizar.",
+  "The custom update will appear after the changes are merged and tested.": "A atualização personalizada aparecerá após a integração e os testes das mudanças.",
+  "DSZ upstream {} is available": "DSZ original {} está disponível",
   "I saved it somewhere else…": "Salvei em outro lugar…",
   "DSZ {} is the latest version.": "DSZ {} é a versão mais recente.",
   "Couldn't reach GitHub to check for updates.": "Não foi possível acessar o GitHub para verificar atualizações.",
