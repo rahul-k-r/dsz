@@ -107,6 +107,14 @@ The action list includes **App switcher: hold**, **App switcher: previous**, and
 
 **Display** chooses **Overlay on DSZ icon** (larger top-right digits; a dash when disconnected), **Battery only when connected** (large digits fill the icon, reverting to DSZ on disconnect), or **Separate battery icon** (keeps DSZ unchanged and adds a second, numeric icon only while a controller is connected). The separate icon has its own identity and the same open/menu actions as DSZ. While connected, drag that icon out of Windows' overflow menu or configure its visibility in Windows; keep DSZ in overflow if desired. Windows controls the tray slot dimensions and placement. Disabling the badge or switching display modes removes the extra icon.
 
+The optional **DSZ Battery** extension for PowerToys Command Palette shows the lowest battery percentage across controllers connected to DSZ. It updates while DSZ is running, works independently of the tray badge setting, and doesn't open controllers itself. Search for **DSZ Battery** in the palette after installing the extension, or enable its band in **Command Palette Settings → Dock → Bands** to keep the percentage visible.
+
+Search for **DSZ Profiles** to see the active profiles and select another profile. Like the tray menu, selecting a profile applies it to all connected controllers, or sets the default when none are connected.
+
+Use the matching `dsz.exe` and `DszBattery-x64.zip` from the Windows build artifacts. Extract the ZIP to a folder you intend to keep. With Windows Developer Mode enabled, run `Add-AppxPackage -Register <extracted-AppxManifest.xml>` in PowerShell, then reload Command Palette. The unsigned `DszBattery-x64.msix` is also available for signing.
+
+To build locally, use .NET 10 and the Windows SDK's x64 `makeappx.exe`. Run `extensions/cmdpal/Build-Package.ps1 -DszExe <built-dsz.exe> -MakeAppx <makeappx.exe> -Output <output-directory>`.
+
 ### Automatic DualSense switching
 
 The first time a game runs, the app checks its files once for signs of native DualSense support: Sony's PC pad library, Wwise's DualSense haptics, DualSenseWindows, DualSense controller names, a DirectInput mapping for the DualSense (as in Final Fantasy XIV), its own HID code that names the DualSense (as in Animal Well), SDL with its PS5 driver (as in Astral Ascent and Blood: Refreshed Supply), or Rewired with its DualSense driver (as in Death Squared). SDL and Rewired games read the DualSense natively, so they show PlayStation prompts and use rumble and the lights, though most don't use the haptics or adaptive triggers. While a game that has them is running, the controller switches to your DualSense profile, which presents a virtual DualSense, so the game's own haptics and trigger effects reach the controller. When the game closes, it switches back.

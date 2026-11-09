@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+         xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap3 com rescap">
+  <Identity Name="DSZ.ControllerBattery" Publisher="CN=DSZ Battery" Version="1.0.0.3" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>DSZ Battery</DisplayName>
+    <PublisherDisplayName>DSZ</PublisherDisplayName>
+    <Logo>Assets\Store.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources><Resource Language="en-us" /></Resources>
+  <Applications>
+    <Application Id="Battery" Executable="DszBattery.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="DSZ Battery" Description="Controller battery from DSZ"
+                          BackgroundColor="transparent" Square150x150Logo="Assets\Square150.png"
+                          Square44x44Logo="Assets\Square44.png" AppListEntry="none" />
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="DszBattery.exe" Arguments="-RegisterProcessAsComServer" DisplayName="DSZ Battery">
+              <com:Class Id="614E15A3-096F-4215-AB62-281AB86B08C0" DisplayName="DSZ Battery" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.commandpalette" Id="DSZBattery" PublicFolder="Public"
+                             DisplayName="DSZ Battery" Description="Controller battery from DSZ">
+            <uap3:Properties>
+              <CmdPalProvider>
+                <Activation><CreateInstance ClassId="614E15A3-096F-4215-AB62-281AB86B08C0" /></Activation>
+                <SupportedInterfaces><Commands /></SupportedInterfaces>
+              </CmdPalProvider>
+            </uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities><rescap:Capability Name="runFullTrust" /></Capabilities>
+</Package>

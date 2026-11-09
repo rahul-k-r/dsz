@@ -7,6 +7,7 @@
 mod applog;
 mod audio_led;
 mod backup;
+mod cmdpal;
 mod composer;
 mod device;
 mod dsdetect;

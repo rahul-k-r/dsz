@@ -24,8 +24,27 @@ jobs:
         run: cargo +1.94.1 test --workspace --locked
       - name: Build
         run: cargo +1.94.1 build --release --locked
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Package Command Palette extension
+        shell: pwsh
+        run: |
+          $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $makeAppx = Get-ChildItem $sdkBin -Directory | Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'x64/makeappx.exe' } |
+            Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (!$makeAppx) { throw 'Windows SDK makeappx.exe not found.' }
+          ./extensions/cmdpal/Build-Package.ps1 -DszExe target/release/dsz.exe -MakeAppx $makeAppx -Output target/cmdpal-package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: DSZ-custom-windows
           path: target/release/dsz.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: DSZ-Command-Palette-x64
+          path: |
+            target/cmdpal-package/DszBattery-x64.msix
+            target/cmdpal-package/DszBattery-x64.zip
           if-no-files-found: error

@@ -15,6 +15,13 @@ use crate::platform::wide;
 use crate::tray_badge::Badge;
 
 const WM_TRAY: u32 = WM_APP + 1;
+// The optional Command Palette extension reads this window-owned value.
+const BATTERY_PROPERTY: windows_sys::core::PCWSTR = windows_sys::core::w!("DSZ.BatteryPercent.v1");
+
+fn battery_property(percent: Option<u8>) -> HANDLE {
+    // Null means the running build doesn't publish the property.
+    percent.map_or(1, |value| usize::from(value.min(100)) + 2) as HANDLE
+}
 const ID_SHOW: usize = 1;
 const ID_QUIT: usize = 2;
 const ID_PROFILE_BASE: usize = 100;
@@ -163,15 +170,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 if let Some(e) = ENGINE.get() {
                     let names = e.profiles.names();
                     if let Some(name) = names.get(id - ID_PROFILE_BASE) {
-                        let devs = e.device_list();
-                        if devs.is_empty() {
-                            e.settings.write().default_profile = name.clone();
-                            e.settings_changed();
-                        }
-                        for d in devs {
-                            e.set_device_profile(&d, name);
-                            d.identify_light();
-                        }
+                        e.select_profile(name);
                     }
                 }
             }
@@ -295,6 +294,8 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
             battery_nid.uCallbackMessage = WM_TRAY;
             let mut battery_added = false;
             let mut battery_state = None;
+            crate::cmdpal::start(hwnd, &engine);
+            let mut published = (SetPropW(hwnd, BATTERY_PROPERTY, battery_property(None)) != 0).then_some(None);
 
             // Read cached state only: icon changes add no controller traffic.
             SetTimer(hwnd, 1, 500, None);
@@ -305,6 +306,9 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
                     let chosen = devs.iter().min_by_key(|d| d.live.lock().input.battery_percent);
                     let name = chosen.map(|d| engine.profile_name_for(d)).unwrap_or_else(|| engine.settings.read().default_profile.clone());
                     let percent = chosen.map(|d| d.live.lock().input.battery_percent.min(100));
+                    if published != Some(percent) && SetPropW(hwnd, BATTERY_PROPERTY, battery_property(percent)) != 0 {
+                        published = Some(percent);
+                    }
                     let style = engine.profiles.find(&name).map(|p| p.lighting.tray_badge.clone()).unwrap_or_default();
                     let plan = crate::tray_badge::display_plan(&style, percent);
                     let old_icon = if plan.main != main_state {
@@ -349,6 +353,7 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+            RemovePropW(hwnd, BATTERY_PROPERTY);
             Shell_NotifyIconW(NIM_DELETE, &nid);
             if battery_added { Shell_NotifyIconW(NIM_DELETE, &battery_nid); }
             if !battery_nid.hIcon.is_null() { DestroyIcon(battery_nid.hIcon); }
@@ -359,6 +364,13 @@ pub fn start(engine: Arc<Engine>, on_show: impl Fn() + Send + Sync + 'static) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn palette_property_distinguishes_disconnected_from_empty_battery() {
+        assert_eq!(super::battery_property(None) as usize, 1);
+        assert_eq!(super::battery_property(Some(0)) as usize, 2);
+        assert_eq!(super::battery_property(Some(100)) as usize, 102);
+        assert_eq!(super::battery_property(Some(255)) as usize, 102);
+    }
     use super::*;
     use windows_sys::Win32::Graphics::Gdi::*;
 

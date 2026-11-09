@@ -285,6 +285,22 @@ impl Engine {
             .unwrap_or_else(|| s.default_profile.clone())
     }
 
+    pub fn select_profile(&self, name: &str) -> bool {
+        if self.profiles.find(name).is_none() {
+            return false;
+        }
+        let devices = self.device_list();
+        if devices.is_empty() {
+            self.settings.write().default_profile = name.to_owned();
+            self.settings_changed();
+        }
+        for device in devices {
+            self.set_device_profile(&device, name);
+            device.identify_light();
+        }
+        true
+    }
+
     pub fn set_device_profile(&self, device: &Device, name: &str) {
         // A pick made while a profile is held stays after the release.
         device.held_profile.lock().take();
