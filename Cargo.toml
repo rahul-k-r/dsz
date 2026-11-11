@@ -4,7 +4,7 @@ members = ["crates/ds-proto", "crates/dsz"]
 
 [workspace.package]
 edition = "2021"
-version = "0.4.8+custom.2"
+version = "0.4.9+custom.2"
 license = "MIT"
 
 [profile.release]

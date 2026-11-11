@@ -886,7 +886,7 @@ fn mapping_down(switcher: &mut crate::mapping::AppSwitcher, engine: &Engine, dev
 }
 
 /// Use the mapping's profile while its buttons stay down.
-fn hold_profile(engine: &Engine, device: &Device, m: &Mapping, name: &str, then: &str) {
+fn hold_profile(engine: &Engine, device: &Device, m: &Mapping, name: &str, then: &str, press: bool) {
     let mut buttons = 0u32;
     let mut hide = 0u32;
     for b in m.buttons() {
@@ -906,6 +906,7 @@ fn hold_profile(engine: &Engine, device: &Device, m: &Mapping, name: &str, then:
             buttons,
             hide,
             then: (!then.is_empty()).then(|| then.to_string()),
+            press: if press { buttons } else { 0 },
         },
     );
 }
@@ -1213,8 +1214,13 @@ impl Pipeline {
             }
         }
 
-        // Mappings
-        let (mut suppress, inject, helper) = self.mappings(engine, device, &profile, &s, &prev, now);
+        // Mappings. A hold set to press in the held profile too: its
+        // buttons count as just pressed for the held profile's mappings,
+        // once, on the first report that uses it.
+        let fresh = device.held_profile.lock().as_mut().map_or(0, |h| std::mem::take(&mut h.press));
+        let mut map_prev = prev;
+        map_prev.buttons.0 &= !fresh;
+        let (mut suppress, inject, helper) = self.mappings(engine, device, &profile, &s, &map_prev, now);
         let held_hide = device.held_profile.lock().as_ref().map_or(0, |h| h.hide);
         self.held_hide = (self.held_hide | held_hide) & s.buttons.0;
         suppress |= self.held_hide;
@@ -1420,10 +1426,10 @@ impl Pipeline {
 
             if start {
                 rt.active = true;
-                if let Action::HoldProfile { name, then } = &m.action {
+                if let Action::HoldProfile { name, then, press } = &m.action {
                     // Held only as long as the buttons are: the behavior
                     // setting doesn't apply.
-                    hold_profile(engine, device, m, name, then);
+                    hold_profile(engine, device, m, name, then, *press);
                     continue;
                 }
                 match m.mode {
@@ -1953,9 +1959,19 @@ mod hold_profile_tests {
             action: Action::HoldProfile {
                 name: name.into(),
                 then: then.into(),
+                press: false,
             },
             ..Mapping::default()
         }
+    }
+
+    /// `hold`, with "Also in that profile" on.
+    fn hold_press(button: Button, with: &[Button], name: &str) -> Mapping {
+        let mut m = hold(button, with, name, "", true);
+        if let Action::HoldProfile { press, .. } = &mut m.action {
+            *press = true;
+        }
+        m
     }
 
     fn off(button: Button) -> Mapping {
@@ -2035,6 +2051,68 @@ mod hold_profile_tests {
         // And it works again.
         r.step(&[Button::Create]);
         assert_eq!(r.profile(), "Chord");
+        r.step(&[]);
+        assert_eq!(r.profile(), "Base");
+    }
+
+    #[test]
+    fn held_button_presses_in_the_held_profile_when_asked() {
+        let _g = gate();
+        let mut r = rig(vec![hold_press(Button::Create, &[], "Chord")]);
+        r.step(&[Button::Create]);
+        assert_eq!(r.profile(), "Chord");
+        assert!(take_offs().is_empty(), "Base's report doesn't press Chord's mapping");
+        // Chord's first report: its Create mapping sees the press, once.
+        r.step(&[Button::Create]);
+        assert_eq!(take_offs(), vec![MAC.to_string()]);
+        r.step(&[Button::Create]);
+        r.wait(600);
+        assert!(take_offs().is_empty());
+        // Chord's other mappings still need their own press.
+        r.step(&[Button::Create, Button::Cross]);
+        assert_eq!(take_offs(), vec![MAC.to_string()]);
+        r.step(&[]);
+        assert_eq!(r.profile(), "Base");
+        r.step(&[]);
+        assert!(take_offs().is_empty());
+        assert!(r.device.held_profile.lock().is_none());
+        // Each new hold presses again.
+        r.step(&[Button::Create]);
+        r.step(&[Button::Create]);
+        assert_eq!(take_offs(), vec![MAC.to_string()]);
+        r.step(&[]);
+        assert_eq!(r.profile(), "Base");
+    }
+
+    #[test]
+    fn held_combo_presses_in_the_held_profile_when_asked() {
+        let _g = gate();
+        // Chord turns off on Cross; holding Cross + L1 into Chord presses it.
+        let mut r = rig(vec![hold_press(Button::L1, &[Button::Cross], "Chord")]);
+        r.step(&[Button::Cross, Button::L1]);
+        assert_eq!(r.profile(), "Chord");
+        r.step(&[Button::Cross, Button::L1]);
+        assert_eq!(take_offs(), vec![MAC.to_string()]);
+        r.step(&[Button::Cross]);
+        assert_eq!(r.profile(), "Base");
+        r.step(&[]);
+        assert!(take_offs().is_empty());
+    }
+
+    #[test]
+    fn held_press_into_a_profile_that_holds_again_is_harmless() {
+        let _g = gate();
+        // Chord holds itself on the same button: no second hold, no loop.
+        let mut r = rig(vec![hold_press(Button::Create, &[], "Chord")]);
+        r.engine
+            .profiles
+            .update(plain("Chord", vec![hold_press(Button::Create, &[], "After")]));
+        r.step(&[Button::Create]);
+        assert_eq!(r.profile(), "Chord");
+        r.step(&[Button::Create]);
+        r.step(&[Button::Create]);
+        assert_eq!(r.profile(), "Chord");
+        assert_eq!(r.device.held_profile.lock().as_ref().map(|h| h.press), Some(0));
         r.step(&[]);
         assert_eq!(r.profile(), "Base");
     }
@@ -2246,6 +2324,7 @@ mod hold_profile_tests {
                 buttons: Button::Square.bit(),
                 hide: 0,
                 then: None,
+                press: 0,
             }
         ));
         assert_eq!(r.profile(), "Chord");
