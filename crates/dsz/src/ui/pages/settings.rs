@@ -88,6 +88,12 @@ impl App {
                     );
                     changed |=
                         toggle_row(ui, crate::i18n::tr("Show tips"), crate::i18n::tr("On the Overview page"), &mut s.show_tips);
+                    changed |= toggle_row(
+                        ui,
+                        crate::i18n::tr("Battery as bars"),
+                        crate::i18n::tr("Three bars, like Steam and PlayStation, instead of a percentage"),
+                        &mut s.battery_bars,
+                    );
                     let mut scale = s.ui_scale;
                     let moved = row(ui, crate::i18n::tr("Interface size"), crate::i18n::tr("On top of the Windows display scale"), |ui| {
                         ui.add(
@@ -132,6 +138,14 @@ impl App {
                                 .changed();
                         },
                     );
+                    if s.idle_off_minutes > 0 {
+                        changed |= toggle_row(
+                            ui,
+                            crate::i18n::tr("Dim the lightbar first"),
+                            crate::i18n::tr("Fades out over the last minutes before it turns off, so you can see it coming. Any press brings it back. A game's own light isn't dimmed"),
+                            &mut s.idle_dim,
+                        );
+                    }
                     changed |= toggle_row(
                         ui,
                         crate::i18n::tr("Drop corrupted radio packets"),

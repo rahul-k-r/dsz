@@ -104,6 +104,11 @@ pub struct Settings {
     pub game_picks: BTreeMap<String, String>,
     /// Power off a Bluetooth controller after this many idle minutes (0 = never).
     pub idle_off_minutes: u32,
+    /// Fade the lightbar out over the last minutes before an idle power-off
+    /// (see `composer::idle_fade`). Only does anything while
+    /// `idle_off_minutes` is set, and on by default: it is a warning for
+    /// people who use the power-off, not a new look.
+    pub idle_dim: bool,
     /// Quick Charge: drop a controller's Bluetooth link when the same
     /// controller (by MAC) is plugged in over USB, so only USB is left.
     /// On by default. Stored as `quick_charge_v2`: up to 0.4.4 it was off
@@ -117,6 +122,9 @@ pub struct Settings {
     pub check_input_crc: bool,
     /// Show the welcome card on the overview page.
     pub show_tips: bool,
+    /// Show controller batteries as three bars instead of a percentage.
+    /// Off by default, so the percentage stays as it was.
+    pub battery_bars: bool,
     /// Let the app use HidHide to hide a controller while a virtual one is up.
     pub hidhide_control: bool,
     /// Start every controller on `default_profile` when the app starts,
@@ -187,10 +195,12 @@ impl Default for Settings {
             remember_game_picks: true,
             game_picks: BTreeMap::new(),
             idle_off_minutes: 15,
+            idle_dim: true,
             quick_charge: true,
             ui_scale: 1.0,
             check_input_crc: true,
             show_tips: true,
+            battery_bars: false,
             hidhide_control: true,
             default_on_start: true,
             auto_dualsense: true,
@@ -210,6 +220,17 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// A controller's battery as the window's controller list and the tray
+    /// show it: the percentage, or bars when `battery_bars` is on.
+    pub fn battery_label(&self, input: &ds_proto::InputState) -> String {
+        if self.battery_bars {
+            let n = input.battery_bars() as usize;
+            format!("{}{}", "■".repeat(n), "□".repeat(3 - n))
+        } else {
+            format!("{}%", input.battery_shown())
+        }
+    }
+
     pub fn path(dir: &Path) -> PathBuf {
         dir.join("settings.json")
     }
@@ -254,6 +275,33 @@ mod tests {
     }
 
     #[test]
+    fn battery_bars_default_off_and_old_files_load_unchanged() {
+        assert!(!Settings::default().battery_bars);
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("battery_bars");
+        let parsed: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(parsed, Settings::default());
+        let parsed: Settings = serde_json::from_str(r#"{"battery_bars":true}"#).unwrap();
+        assert!(parsed.battery_bars);
+    }
+
+    #[test]
+    fn battery_label_is_the_percentage_unless_bars_are_on() {
+        let input = ds_proto::InputState {
+            full: true,
+            battery_percent: 80,
+            battery_status: ds_proto::BatteryStatus::Discharging,
+            ..Default::default()
+        };
+        assert_eq!(Settings::default().battery_label(&input), "85%");
+        let bars = Settings { battery_bars: true, ..Settings::default() };
+        assert_eq!(bars.battery_label(&input), "■■■");
+        let low = ds_proto::InputState { battery_percent: 20, ..input };
+        assert_eq!(bars.battery_label(&low), "■□□");
+        assert_eq!(bars.battery_label(&ds_proto::InputState::default()), "□□□");
+    }
+
+    #[test]
     fn quick_charge_defaults_on_once_and_a_new_choice_is_kept() {
         assert!(Settings::default().quick_charge);
         let parsed: Settings = serde_json::from_str("{}").unwrap();
@@ -294,6 +342,16 @@ mod tests {
         assert!(saved.get("default_on_start").is_none());
         let back: Settings = serde_json::from_value(saved).unwrap();
         assert!(!back.default_on_start, "turned off from now on, it stays off");
+    }
+
+    #[test]
+    fn idle_dim_is_on_for_older_settings_and_a_choice_is_kept() {
+        let parsed: Settings = serde_json::from_str(r#"{"idle_off_minutes":10}"#).unwrap();
+        assert!(parsed.idle_dim);
+        assert_eq!(parsed.idle_off_minutes, 10);
+        let off = Settings { idle_dim: false, ..Settings::default() };
+        let back: Settings = serde_json::from_value(serde_json::to_value(&off).unwrap()).unwrap();
+        assert!(!back.idle_dim);
     }
 
     #[test]
