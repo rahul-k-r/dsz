@@ -216,6 +216,10 @@ pub struct Device {
     pub(crate) haptics_wake: Receiver<()>,
     /// The haptics thread owns the actuators (PCM mode).
     pub pcm_mode: AtomicBool,
+    /// "Classic rumble always" has the actuators: the firmware's rumble
+    /// emulation plays and the haptic stream leaves its haptic packet out.
+    /// Set by the writer from [`crate::composer::Composer::classic_owns`].
+    pub classic_rumble: AtomicBool,
     /// A game's haptic audio is playing on a wired controller's own sound
     /// device: the control reports leave the motor fields unmarked, or the
     /// firmware's rumble emulation takes the actuators and the audio isn't
@@ -265,6 +269,9 @@ pub struct Device {
     quick_charge_off: AtomicBool,
     /// Recent radio traffic, logged if the controller drops by itself.
     pub flight: crate::flight::Recorder,
+    /// Last button, stick, trigger or touch use (or microphone recording):
+    /// what the idle power-off counts from, and the idle lightbar fade.
+    pub last_activity: Mutex<Instant>,
 }
 
 impl Device {
@@ -930,6 +937,7 @@ pub fn run(engine: Arc<Engine>, info: DeviceInfo, id: u64) {
         haptics_wake_tx,
         haptics_wake,
         pcm_mode: AtomicBool::new(false),
+        classic_rumble: AtomicBool::new(false),
         usb_haptics: AtomicBool::new(false),
         haptic_level: [AtomicU8::new(0), AtomicU8::new(0)],
         speaker_level: AtomicU8::new(0),
@@ -952,6 +960,7 @@ pub fn run(engine: Arc<Engine>, info: DeviceInfo, id: u64) {
         dead: AtomicBool::new(false),
         quick_charge_off: AtomicBool::new(false),
         flight: Default::default(),
+        last_activity: Mutex::new(Instant::now()),
     });
     log::info!(
         "connected {} over {:?}, MAC {}, firmware {}",
@@ -1086,7 +1095,7 @@ fn reader_loop(engine: &Arc<Engine>, device: &Arc<Device>, dev: &HidDevice) {
     let mut last_rate = Instant::now();
     let mut count_since = 0u32;
     let mut last_short_retry = Instant::now();
-    let mut last_activity = Instant::now();
+    *device.last_activity.lock() = Instant::now();
     let mut errors = 0u32;
     let mut check_crc = engine.settings.read().check_input_crc;
     // A DualShock 4 clone often copies the report and not the CRC. Trust the
@@ -1159,7 +1168,7 @@ fn reader_loop(engine: &Arc<Engine>, device: &Arc<Device>, dev: &HidDevice) {
                             let _ = dev.get_feature(0x05, 41);
                         }
                         if is_active(&state, &prev) {
-                            last_activity = now;
+                            *device.last_activity.lock() = now;
                         }
                         {
                             let mut link = device.link.lock();
@@ -1195,7 +1204,7 @@ fn reader_loop(engine: &Arc<Engine>, device: &Arc<Device>, dev: &HidDevice) {
                             // A voice call is activity even when no buttons
                             // move. Muted/disabled capture retains idle-off.
                             if device.microphone.recording() {
-                                last_activity = Instant::now();
+                                *device.last_activity.lock() = Instant::now();
                             }
                             device.microphone.enqueue(packet);
                             if let Some(tap) = device.mic_tap.lock().as_mut() {
@@ -1251,13 +1260,14 @@ fn reader_loop(engine: &Arc<Engine>, device: &Arc<Device>, dev: &HidDevice) {
             }
             // Idle power-off for Bluetooth controllers.
             let idle_min = engine.settings.read().idle_off_minutes;
+            let last_activity = *device.last_activity.lock();
             if idle_min > 0
                 && device.is_bluetooth()
                 && now.duration_since(last_activity) > Duration::from_secs(idle_min as u64 * 60)
             {
                 log::info!("idle for {idle_min} min, turning the controller off");
                 device.flight.expect_off.store(true, Ordering::Release);
-                last_activity = now;
+                *device.last_activity.lock() = now;
                 let mac = device.mac.lock().clone();
                 crate::platform::bt_disconnect(&mac);
             }
@@ -1447,6 +1457,17 @@ fn writer_loop(engine: &Arc<Engine>, device: &Arc<Device>, dev: &HidDevice) {
             meter = None;
         }
         let loudness = engine.audio.loudness();
+        composer.idle_level = {
+            let s = engine.settings.read();
+            if s.idle_dim && s.idle_off_minutes > 0 && device.is_bluetooth() {
+                crate::composer::idle_fade(
+                    now.saturating_duration_since(*device.last_activity.lock()),
+                    Duration::from_secs(s.idle_off_minutes as u64 * 60),
+                )
+            } else {
+                1.0
+            }
+        };
         let input = device.live.lock().input;
         let overrides = device.overrides.lock().clone();
         let toggles = *device.toggles.lock();
@@ -1464,6 +1485,9 @@ fn writer_loop(engine: &Arc<Engine>, device: &Arc<Device>, dev: &HidDevice) {
                 now,
             )
         };
+        device
+            .classic_rumble
+            .store(composer.classic_owns(), Ordering::Release);
         let mut microphone_managed = false;
         let route = device.speaker_route.load(Ordering::Acquire);
         if !device.is_bluetooth() && !device.model.is_dualshock4() && route != SPEAKER_UNTOUCHED {
@@ -1624,6 +1648,7 @@ impl Device {
             haptics_wake_tx,
             haptics_wake,
             pcm_mode: AtomicBool::new(false),
+            classic_rumble: AtomicBool::new(false),
             usb_haptics: AtomicBool::new(false),
             haptic_level: [AtomicU8::new(0), AtomicU8::new(0)],
             speaker_level: AtomicU8::new(0),
@@ -1646,6 +1671,7 @@ impl Device {
             dead: AtomicBool::new(false),
             quick_charge_off: AtomicBool::new(false),
             flight: Default::default(),
+            last_activity: Mutex::new(Instant::now()),
         })
     }
 }
