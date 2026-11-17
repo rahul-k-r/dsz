@@ -100,6 +100,18 @@ pub struct Lighting {
     /// Percent of full scale where the bar becomes the loud colour.
     #[serde(default = "default_audio_loud_at")]
     pub audio_loud_at: u8,
+    /// Blend the static, breathing or strobe color into
+    /// `battery_fade_color` as the battery drains, like DS4Windows' "color
+    /// by battery". Off by default.
+    pub battery_fade: bool,
+    /// The color at an empty battery.
+    pub battery_fade_color: [u8; 3],
+    /// Its brightness, 0..=100, apart from the main one so the warning end
+    /// can be brighter.
+    pub battery_fade_brightness: u8,
+    /// Battery percent where the blend starts; at 0 % it is all
+    /// `battery_fade_color`. 100 blends across the whole charge.
+    pub battery_fade_from: u8,
 }
 
 impl Default for Lighting {
@@ -122,6 +134,10 @@ impl Default for Lighting {
             audio_loud: default_audio_loud(),
             audio_medium_at: default_audio_medium_at(),
             audio_loud_at: default_audio_loud_at(),
+            battery_fade: false,
+            battery_fade_color: [0xFF, 0x30, 0x20],
+            battery_fade_brightness: 100,
+            battery_fade_from: 100,
         }
     }
 }
@@ -153,6 +169,14 @@ pub struct Rumble {
     pub power_reduction: u8,
     /// Firmware "improved rumble emulation".
     pub enhanced: bool,
+    /// Classic rumble (a game's or a test's) always goes to the
+    /// controller's own rumble emulation, even while haptics stream, where
+    /// it would otherwise be played as haptics (issue 43). The firmware
+    /// takes the actuators while it rumbles, so streamed haptics pause
+    /// until the rumble stops. Left out of the JSON while off, so saved
+    /// profiles stay as they were.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub always_classic: bool,
 }
 
 impl Default for Rumble {
@@ -160,6 +184,7 @@ impl Default for Rumble {
         Rumble {
             power_reduction: 0,
             enhanced: true,
+            always_classic: false,
         }
     }
 }
@@ -659,6 +684,12 @@ pub enum Action {
         /// Profile to switch to on release; empty goes back.
         #[serde(default)]
         then: String,
+        /// The held buttons also do their own mappings in the held profile,
+        /// as if pressed when it starts. Off keeps the press from leaking
+        /// into the held profile; left out of the JSON while off, so saved
+        /// profiles stay as they were.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        press: bool,
     },
     /// Press a button on the virtual controller (needs one active).
     Gamepad {
@@ -1356,6 +1387,24 @@ mod tests {
     }
 
     #[test]
+    fn classic_rumble_always_is_off_and_left_out_until_turned_on() {
+        let p: Profile =
+            serde_json::from_str(r#"{"name":"Old","rumble":{"power_reduction":2,"enhanced":false}}"#).unwrap();
+        assert!(!p.rumble.always_classic);
+        assert_eq!(p.rumble.power_reduction, 2);
+        for p in Profile::starter_set() {
+            assert!(!p.rumble.always_classic, "{}", p.name);
+            let json = serde_json::to_string(&p).unwrap();
+            assert!(!json.contains("always_classic"), "{}", p.name);
+        }
+        let mut on = Profile::default();
+        on.rumble.always_classic = true;
+        let json = serde_json::to_string(&on).unwrap();
+        assert!(json.contains(r#""always_classic":true"#));
+        assert_eq!(serde_json::from_str::<Profile>(&json).unwrap(), on);
+    }
+
+    #[test]
     fn older_profiles_load_with_dualshock4_audio_off() {
         let p: Profile =
             serde_json::from_str(r#"{"name":"Old","haptics":{"speaker_volume":50,"pc_audio_on_speaker":true}}"#)
@@ -1481,6 +1530,7 @@ mod tests {
         assert_eq!(p.lighting.audio_loud, default_audio_loud());
         assert_eq!(p.lighting.audio_medium_at, default_audio_medium_at());
         assert_eq!(p.lighting.audio_loud_at, default_audio_loud_at());
+        assert!(!p.lighting.battery_fade, "old profiles keep their color");
         // Existing profiles never start recording after this upgrade.
         assert!(!p.microphone.enabled);
         assert_eq!(p.microphone.gain_percent, 100);
@@ -1550,6 +1600,7 @@ mod tests {
         let a = Action::HoldProfile {
             name: "Chord".into(),
             then: String::new(),
+            press: false,
         };
         let j = serde_json::to_string(&a).unwrap();
         assert_eq!(j, r#"{"kind":"hold_profile","name":"Chord","then":""}"#);
@@ -1557,6 +1608,15 @@ mod tests {
         // Without a release profile it goes back.
         let b: Action = serde_json::from_str(r#"{"kind":"hold_profile","name":"Chord"}"#).unwrap();
         assert_eq!(b, a);
+        // Pressing the button in the held profile too is saved only when on.
+        let c = Action::HoldProfile {
+            name: "Chord".into(),
+            then: String::new(),
+            press: true,
+        };
+        let j = serde_json::to_string(&c).unwrap();
+        assert_eq!(j, r#"{"kind":"hold_profile","name":"Chord","then":"","press":true}"#);
+        assert_eq!(serde_json::from_str::<Action>(&j).unwrap(), c);
     }
 
     #[test]
